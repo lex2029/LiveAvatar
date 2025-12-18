@@ -63,7 +63,7 @@
 
 ---
 ## 📰 News
-- **[2025.12.16]** 🚀 LiveAvatar has reached 1,000+ stars on GitHub! Thank you to the community for the incredible support! ⭐
+- **[2025.12.16]** 🎉 LiveAvatar has reached 1,000+ stars on GitHub! Thank you to the community for the incredible support! ⭐
 - **[2025.12.12]** 🚀 We released single-gpu inference [Code](infinite_inference_single_gpu.sh) — no need for 5×H100 (house-priced server), a single 80GB VRAM GPU is enough to enjoy. 
 - **[2025.12.08]** 🚀 We released real-time inference [Code](infinite_inference_multi_gpu.sh) and the model [Weight](https://huggingface.co/Quark-Vision/Live-Avatar).
 - **[2025.12.08]** 🎉 LiveAvatar won the Hugging Face [#1 Paper of the day](https://huggingface.co/papers/date/2025-12-05)!
