@@ -8,23 +8,24 @@
 <!-- <h3>The code will be open source in <strong><span style="color: #87CEEB;">early December</span></strong>.</h3> -->
 
 
+
 <p>
 <a href="https://github.com/Yubo-Shankui" style="color: inherit;">Yubo Huang</a><sup>1,2</sup> ·
-<a href="#" style="color: inherit;">Hailong Guo</a><sup>1,3</sup> ·
-<a href="#" style="color: inherit;">Fangtai Wu</a><sup>1,4</sup> ·
-<a href="#" style="color: inherit;">Shifeng Zhang</a><sup>1</sup> ·
-<a href="#" style="color: inherit;">Shijie Huang</a><sup>1</sup> ·
+<a href="#" style="color: inherit;">Hailong Guo</a><sup>2,3</sup> ·
+<a href="#" style="color: inherit;">Fangtai Wu</a><sup>2,4</sup> ·
+<a href="#" style="color: inherit;">Shifeng Zhang</a><sup>2</sup> ·
+<a href="#" style="color: inherit;">Shijie Huang</a><sup>2</sup> ·
 <a href="#" style="color: inherit;">Qijun Gan</a><sup>4</sup> ·
-<a href="#" style="color: inherit;">Lin Liu</a><sup>2</sup> ·
-<a href="#" style="color: inherit;">Sirui Zhao</a><sup>2,*</sup> ·
-<a href="http://staff.ustc.edu.cn/~cheneh/" style="color: inherit;">Enhong Chen</a><sup>2,*</sup> ·
-<a href="https://openreview.net/profile?id=%7EJiaming_Liu7" style="color: inherit;">Jiaming Liu</a><sup>1,‡</sup> ·
-<a href="https://sites.google.com/view/stevenhoi/" style="color: inherit;">Steven Hoi</a><sup>1</sup>
+<a href="#" style="color: inherit;">Lin Liu</a><sup>1</sup> ·
+<a href="#" style="color: inherit;">Sirui Zhao</a><sup>1,*</sup> ·
+<a href="http://staff.ustc.edu.cn/~cheneh/" style="color: inherit;">Enhong Chen</a><sup>1,*</sup> ·
+<a href="https://openreview.net/profile?id=%7EJiaming_Liu7" style="color: inherit;">Jiaming Liu</a><sup>2,‡</sup> ·
+<a href="https://sites.google.com/view/stevenhoi/" style="color: inherit;">Steven Hoi</a><sup>2</sup>
 </p>
 
 <p style="font-size: 0.9em;">
-<sup>1</sup> Alibaba Group &nbsp;&nbsp;
-<sup>2</sup> University of Science and Technology of China &nbsp;&nbsp;
+<sup>1</sup> University of Science and Technology of China &nbsp;&nbsp;
+<sup>2</sup> Alibaba Group &nbsp;&nbsp;
 <sup>3</sup> Beijing University of Posts and Telecommunications &nbsp;&nbsp;
 <sup>4</sup> Zhejiang University
 </p>
@@ -63,6 +64,7 @@
 
 ---
 ## 📰 News
+- **[2025.12.16]** 🎉 LiveAvatar has reached 1,000+ stars on GitHub! Thank you to the community for the incredible support! ⭐
 - **[2025.12.12]** 🚀 We released single-gpu inference [Code](infinite_inference_single_gpu.sh) — no need for 5×H100 (house-priced server), a single 80GB VRAM GPU is enough to enjoy. 
 - **[2025.12.08]** 🚀 We released real-time inference [Code](infinite_inference_multi_gpu.sh) and the model [Weight](https://huggingface.co/Quark-Vision/Live-Avatar).
 - **[2025.12.08]** 🎉 LiveAvatar won the Hugging Face [#1 Paper of the day](https://huggingface.co/papers/date/2025-12-05)!
