@@ -1048,6 +1048,7 @@ class CausalWanModel_S2V(ModelMixin, ConfigMixin):
         return [n for n in torch.zeros_like(cond_states)]
 
 
+    @conditional_compile
     def _forward_inference(
             self,
             x,
@@ -1086,7 +1087,7 @@ class CausalWanModel_S2V(ModelMixin, ConfigMixin):
                             add_last_motion = 2: All motion-related latents are used. check过了是 2
         drop_motion_frames  Bool, whether drop the motion frames info
         """
-        add_last_motion = self.add_last_motion * add_last_motion
+        add_last_motion = int(self.add_last_motion) * add_last_motion
         audio_input = torch.cat([
             audio_input[..., 0:1].repeat(1, 1, 1, motion_frames[0]), audio_input
         ], #torch.Size([1, 25, 1024, 80])->torch.Size([1, 25, 1024, 153])

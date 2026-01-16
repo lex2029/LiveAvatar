@@ -1,6 +1,6 @@
 import torch
 STREAMING_VAE = True
-COMPILE = False
+COMPILE = True
 torch._dynamo.config.cache_size_limit = 128
 
 NO_REFRESH_INFERENCE = False
@@ -15,6 +15,6 @@ def disable(func):
 
 def conditional_compile(func):
     if COMPILE:
-        return torch.compile(mode="default", backend="inductor", dynamic=True)(func)
+        return torch.compile(mode=None, backend="inductor", dynamic=None)(func)
     else:
         return func
