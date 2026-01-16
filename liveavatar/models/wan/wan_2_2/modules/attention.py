@@ -18,7 +18,38 @@ import warnings
 __all__ = [
     'flash_attention',
     'attention',
+    'cudnn_attention_forward_with_lse'
 ]
+
+
+def cudnn_attention_forward_with_lse(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    attn_mask = None,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    scale = None,
+) -> torch.Tensor:
+    # print(f"{q.shape=} {k.shape=}  {v.shape=}")
+
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
+    out = torch.ops.aten._scaled_dot_product_cudnn_attention(
+        q,
+        k,
+        v,
+        attn_bias=attn_mask,
+        compute_log_sumexp=True,
+        dropout_p=dropout_p,
+        is_causal=is_causal,
+        scale=scale,
+    )
+    if isinstance(out, tuple):
+        out = out[0]
+    out = out.transpose(1, 2).contiguous()
+    return out
 
 
 def flash_attention(
@@ -145,7 +176,16 @@ def attention(
     dtype=torch.bfloat16,
     fa_version=None,
 ):
-    if FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE:
+    def cudnn_require():
+        if window_size != (-1, -1):
+            return False
+        if not q.shape[-1] <= 256:
+            return False
+        return True
+
+    if cudnn_require():
+        return cudnn_attention_forward_with_lse(q, k, v, is_causal=causal)
+    elif FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE:
         return flash_attention(
             q=q,
             k=k,

@@ -36,7 +36,8 @@ from liveavatar.models.wan.wan_2_2.modules.s2v.model_s2v import (
 from liveavatar.models.wan.wan_2_2.modules.s2v.model_s2v import rope_apply as rope_apply, rope_apply as causal_rope_apply, rope_apply_cond as causal_rope_apply_cond
 from liveavatar.models.wan.wan_2_2.modules.s2v.model_s2v import rope_apply_usp as rope_apply_usp, rope_apply_usp as causal_rope_apply_usp
 
-from liveavatar.models.wan.wan_base.modules.attention import attention
+# from liveavatar.models.wan.wan_base.modules.attention import attention
+from liveavatar.models.wan.wan_2_2.modules.attention import attention
 from liveavatar.models.wan.wan_2_2.modules.s2v.audio_utils import AudioInjector_WAN, CausalAudioEncoder
 from liveavatar.models.wan.causal_motioner import FramePackMotioner
 from liveavatar.models.wan.causal_s2v_utils import rollout_grid_sizes,causal_distributed_attention
@@ -301,7 +302,7 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
 
                 kv_cache["k"][:, current_start:(current_start+seg_len_block)] = roped_key[:,seg_idx[0]:seg_idx[1]]
                 kv_cache["v"][:, current_start:(current_start+seg_len_block)] = v[:,seg_idx[0]:seg_idx[1]]
-                x = flash_attention(
+                x = attention(
                     q=roped_query[:,seg_idx[0]:seg_idx[1]],
                     k=torch.cat(
                                 [
@@ -326,14 +327,15 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
                 kv_cache["cond_end"][0] = max(int(kv_cache["cond_end"]), seg_idx[2]-seg_idx[1])
                 kv_cache["cond_k"][:, :int(kv_cache["cond_end"])] = k[:,seg_idx[1]:seg_idx[2]]
                 kv_cache["cond_v"][:, :int(kv_cache["cond_end"])] = v[:,seg_idx[1]:seg_idx[2]]
-                x = flash_attention(
+                x = attention(
                     q=roped_query[:,seg_idx[1]:seg_idx[2]],
                     k=causal_rope_apply_cond(
                             k, grid_sizes, freqs
                         ).type_as(v)[:,:int(kv_cache["cond_end"])],
                     v=kv_cache["cond_v"][:, :int(kv_cache["cond_end"])],
                     k_lens=torch.tensor(int(kv_cache["cond_end"])).repeat(b),
-                    window_size=self.window_size)
+                    window_size=self.window_size
+                )
             else:
                 assert False, "segment index is invalid"
 
