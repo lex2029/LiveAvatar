@@ -64,9 +64,8 @@
 
 ---
 ## 📰 News
-- **[2026.1.20]** 🚀 Another major performance breakthrough! **FP8 quantization** enables inference on **48GB GPUs**, while advanced **compilation** and **cuDNN** attention boost speed to **~2.5x** peak and **3x** average FPS. Achieving stable **45+ FPS** on multi-H800 — share your results on different GPUs!
-- **[2026.1.9]** 🚀 Major performance update! Inference speed boosted to Peak 1.5x and Average 2x, achieving stable 30+ FPS on multi-H800 setups. Fixed inference issues also bring noticeable **quality 
-improvements**.
+- **[2026.1.20]** 🚀 Major performance breakthrough (**v1.1**)! **FP8 quantization** enables inference on **48GB GPUs**, while advanced **compilation** and **cuDNN** attention boost speed to **~2.5x** peak and **3x** average FPS. Achieving stable **45+ FPS** on multi-H800 — share your results on different GPUs! Inference fixes also bring noticeable **quality improvements**, significantly surpassing the teacher model on qualitative metrics.
+<!-- - **[2026.1.9]** 🚀 Major performance update! Inference speed boosted to Peak 1.5x and Average 2x, achieving stable 30+ FPS on multi-H800 setups.  -->
 - **[2025.12.16]** 🎉 LiveAvatar has reached **1,000+** stars on GitHub! Thank you to the community for the incredible support! ⭐
 - **[2025.12.12]** 🚀 We released **single-gpu** inference [Code](infinite_inference_single_gpu.sh) — no need for 5×H800 (house-priced server), a single 80GB VRAM GPU is enough to enjoy. 
 - **[2025.12.08]** 🚀 We released **real-time** inference [Code](infinite_inference_multi_gpu.sh) and the model [Weight](https://huggingface.co/Quark-Vision/Live-Avatar).
@@ -98,7 +97,7 @@ improvements**.
 - ⬜ UI integration for easily streaming interaction
 - ⬜ TTS integration
 - ⬜ Training code 
-- ⬜ LiveAvatar v1.1
+- ⬜ LiveAvatar v1.2
 
 ## 🛠️ Installation
 
