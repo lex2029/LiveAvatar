@@ -21,6 +21,7 @@ import torch
 
 REPO_ROOT = Path(__file__).resolve().parent
 ENV_PATH = REPO_ROOT / ".env"
+CONFIG_PATH = REPO_ROOT / "worker_config.json"
 VENV_BIN = REPO_ROOT / ".venv" / "bin"
 TORCHRUN = VENV_BIN / "torchrun"
 PYTHON_BIN = VENV_BIN / "python"
@@ -49,6 +50,18 @@ def load_env_file(path: Path) -> None:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip())
+
+
+def load_config_file(path: Path) -> None:
+    if not path.exists():
+        return
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Config file must contain a JSON object: {path}")
+    for key, value in data.items():
+        if value is None:
+            continue
+        os.environ.setdefault(str(key), str(value))
 
 
 def getenv_required(name: str) -> str:
@@ -609,6 +622,7 @@ def handle_signal(signum: int, _frame: Any) -> None:
 
 
 def main() -> int:
+    load_config_file(CONFIG_PATH)
     load_env_file(ENV_PATH)
     (REPO_ROOT / "worker_runs").mkdir(exist_ok=True)
 
