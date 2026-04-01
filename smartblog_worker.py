@@ -36,6 +36,10 @@ STOP_REQUESTED = False
 RUNNER: Optional["ResidentLiveAvatarRunner"] = None
 
 
+class JobStoppedByServer(RuntimeError):
+    pass
+
+
 def log(message: str) -> None:
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     print(f"[{ts}] {message}", flush=True)
@@ -150,15 +154,16 @@ def detect_orientation(image_path: Path) -> str:
     return "landscape" if width >= height else "portrait"
 
 
-def parse_hw_size(size: str) -> tuple[int, int]:
-    height, width = map(int, size.split("*"))
-    return height, width
-
-
 def orientation_to_render_size(orientation: str) -> str:
     if orientation == "landscape":
         return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "720*1280")
     return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE", "832*480")
+
+
+def orientation_to_free_render_size(orientation: str) -> str:
+    if orientation == "landscape":
+        return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE_FREE", "256*384")
+    return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE_FREE", "384*256")
 
 
 def orientation_to_output_size(orientation: str) -> str:
@@ -175,6 +180,20 @@ def choose_prompt(payload: Dict[str, Any]) -> str:
     return os.getenv("LIVEAVATAR_DEFAULT_PROMPT", DEFAULT_PROMPT)
 
 
+def plan_key_for_job(job: Dict[str, Any], payload: Dict[str, Any]) -> str:
+    for value in (
+        job.get("plan_key"),
+        payload.get("plan_key"),
+        payload.get("subscription_plan"),
+        payload.get("plan"),
+        payload.get("tariff"),
+        payload.get("tier"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return "pro"
+
+
 def compute_num_clip(audio_duration: float, infer_frames: int, fps: int) -> int:
     clip_seconds = infer_frames / float(fps)
     safety_margin = 2
@@ -182,35 +201,6 @@ def compute_num_clip(audio_duration: float, infer_frames: int, fps: int) -> int:
     minimum = int(os.getenv("LIVEAVATAR_MIN_NUM_CLIP", "1"))
     maximum = int(os.getenv("LIVEAVATAR_MAX_NUM_CLIP", "120"))
     return max(minimum, min(raw, maximum))
-
-
-def crop_image_to_render_aspect(image_path: Path, render_size: str) -> None:
-    target_height, target_width = parse_hw_size(render_size)
-    target_aspect = target_width / float(target_height)
-
-    with Image.open(image_path) as image:
-        image = image.convert("RGB")
-        src_width, src_height = image.size
-        src_aspect = src_width / float(src_height)
-
-        if abs(src_aspect - target_aspect) < 1e-4:
-            return
-
-        if src_aspect > target_aspect:
-            cropped_width = max(1, int(round(src_height * target_aspect)))
-            left = max(0, (src_width - cropped_width) // 2)
-            box = (left, 0, left + cropped_width, src_height)
-        else:
-            cropped_height = max(1, int(round(src_width / target_aspect)))
-            top = max(0, (src_height - cropped_height) // 2)
-            box = (0, top, src_width, top + cropped_height)
-
-        cropped = image.crop(box)
-        cropped.save(image_path)
-        log(
-            f"Cropped avatar to match render aspect {render_size}: "
-            f"{src_width}x{src_height} -> {cropped.width}x{cropped.height}"
-        )
 
 
 def random_suffix(length: int = 8) -> str:
@@ -283,6 +273,7 @@ class ResidentLiveAvatarRunner:
         self.MAX_AREA_CONFIGS = MAX_AREA_CONFIGS
         self.cfg = WAN_CONFIGS["s2v-14B"]
         self.training_settings = training_config_parser(str(REPO_ROOT / "liveavatar/configs/s2v_causal_sft.yaml"))
+        self.MAX_AREA_CONFIGS.setdefault("256*384", 256 * 384)
 
         log("Loading LiveAvatar pipeline into resident worker memory")
         offload_kv_cache = os.getenv("LIVEAVATAR_OFFLOAD_KV_CACHE", "false").lower() == "true"
@@ -523,9 +514,10 @@ def process_job(job_id: str) -> None:
             if orientation not in {"portrait", "landscape"}:
                 orientation = detect_orientation(image_path)
 
-            render_size = orientation_to_render_size(orientation)
+            plan_key = plan_key_for_job(job, payload)
+            is_free_plan = plan_key == "free"
+            render_size = orientation_to_free_render_size(orientation) if is_free_plan else orientation_to_render_size(orientation)
             output_size = orientation_to_output_size(orientation)
-            crop_image_to_render_aspect(image_path, render_size)
             prompt = choose_prompt(payload)
             infer_frames = int(os.getenv("LIVEAVATAR_INFER_FRAMES", "48"))
             sample_fps = 25
@@ -534,7 +526,8 @@ def process_job(job_id: str) -> None:
             base_seed = int(payload.get("seed") or os.getenv("LIVEAVATAR_BASE_SEED", "420"))
 
             log(
-                f"Processing job {job_id}: orientation={orientation}, render_size={render_size}, output_size={output_size}, "
+                f"Processing job {job_id}: orientation={orientation}, plan_key={plan_key}, "
+                f"render_size={render_size}, output_size={output_size}, "
                 f"audio_duration={audio_duration:.2f}s, num_clip={num_clip}"
             )
 
@@ -583,9 +576,15 @@ def process_job(job_id: str) -> None:
                     return
 
                 try:
-                    report_progress(job_id, progress)
+                    ack = call_worker_api({"action": "progress", "job_id": job_id, "progress": max(0, min(100, int(progress)))})
+                    if ack.get("stop"):
+                        raise JobStoppedByServer(
+                            f"Server stopped job: {ack.get('status', 'unknown')} / {ack.get('reason', 'no reason')}"
+                        )
                     last_reported_progress = progress
                     log(f"Job {job_id} progress: {progress}% ({stage} {clip_index}/{clip_total})")
+                except JobStoppedByServer:
+                    raise
                 except Exception as progress_exc:
                     log(
                         f"Job {job_id} progress update failed at {progress}% "
@@ -597,7 +596,11 @@ def process_job(job_id: str) -> None:
                 if progress == last_reported_progress:
                     return
                 try:
-                    report_progress(job_id, progress)
+                    ack = call_worker_api({"action": "progress", "job_id": job_id, "progress": max(0, min(100, int(progress)))})
+                    if ack.get("stop"):
+                        raise JobStoppedByServer(
+                            f"Server stopped job: {ack.get('status', 'unknown')} / {ack.get('reason', 'no reason')}"
+                        )
                     last_reported_progress = progress
                     if total_seconds > 0:
                         log(
@@ -606,6 +609,8 @@ def process_job(job_id: str) -> None:
                         )
                     else:
                         log(f"Job {job_id} progress: {progress}% (upscale)")
+                except JobStoppedByServer:
+                    raise
                 except Exception as progress_exc:
                     log(
                         f"Job {job_id} progress update failed at {progress}% "
@@ -615,7 +620,7 @@ def process_job(job_id: str) -> None:
             log(
                 f"Job {job_id} render started "
                 f"(render_size={render_size}, output_size={output_size}, infer_frames={infer_frames}, "
-                f"num_clip={num_clip}, runner_cold_start={runner_cold_start}, "
+                f"num_clip={num_clip}, plan_key={plan_key}, runner_cold_start={runner_cold_start}, "
                 f"runner_acquire={format_seconds(runner_acquire_duration)}, runner_jobs_before={runner_jobs_before})"
             )
             runner.render(
@@ -686,7 +691,7 @@ def process_job(job_id: str) -> None:
             )
             log(
                 f"Job {job_id} summary: orientation={orientation}, render_size={render_size}, "
-                f"output_size={output_size}, audio={audio_duration:.1f}s, infer_frames={infer_frames}, "
+                f"output_size={output_size}, plan_key={plan_key}, audio={audio_duration:.1f}s, infer_frames={infer_frames}, "
                 f"num_clip={num_clip}, cold_start={runner_cold_start}, "
                 f"runner_acquire={format_seconds(runner_acquire_duration)}, "
                 f"pipeline_init={format_seconds(runner.init_duration) if runner_cold_start else '0.0s'}, "
@@ -696,6 +701,9 @@ def process_job(job_id: str) -> None:
                 f"upscale={format_seconds(upscale_finished_at - upscale_started_at)}, "
                 f"upload={format_seconds(upload_finished_at - upload_started_at)}"
             )
+        except JobStoppedByServer as exc:
+            log(f"Job {job_id} canceled by server: {exc}")
+            return
         except Exception as exc:
             error_text = str(exc)
             log(f"Job {job_id} failed: {error_text}")
