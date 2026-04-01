@@ -204,9 +204,13 @@ def liveavatar_env(enable_compile: bool) -> Dict[str, str]:
 
 class ResidentLiveAvatarRunner:
     def __init__(self) -> None:
+        self.init_started_at = time.perf_counter()
         self._setup_env()
         self._setup_dist()
         self._load_pipeline()
+        self.init_finished_at = time.perf_counter()
+        self.init_duration = self.init_finished_at - self.init_started_at
+        self.jobs_processed = 0
 
     def _setup_env(self) -> None:
         cuda_home = os.getenv("CUDA_HOME", "/usr/local/cuda")
@@ -219,7 +223,7 @@ class ResidentLiveAvatarRunner:
         os.environ.setdefault("RANK", "0")
         os.environ.setdefault("WORLD_SIZE", "1")
         os.environ.setdefault("LOCAL_RANK", "0")
-        os.environ.setdefault("ENABLE_COMPILE", "false")
+        os.environ.setdefault("ENABLE_COMPILE", "true")
         os.environ.setdefault("PYTHONUNBUFFERED", "1")
         os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
@@ -358,9 +362,13 @@ class ResidentLiveAvatarRunner:
 
 def get_runner() -> ResidentLiveAvatarRunner:
     global RUNNER
+    cold_start = False
+    acquire_started_at = time.perf_counter()
     if RUNNER is None:
         RUNNER = ResidentLiveAvatarRunner()
-    return RUNNER
+        cold_start = True
+    acquire_duration = time.perf_counter() - acquire_started_at
+    return RUNNER, cold_start, acquire_duration
 
 
 def normalize_video(
@@ -488,7 +496,6 @@ def process_job(job_id: str) -> None:
             sample_fps = 25
             audio_duration = probe_audio_duration(audio_path)
             num_clip = compute_num_clip(audio_duration, infer_frames=infer_frames, fps=sample_fps)
-            enable_compile = audio_duration >= float(os.getenv("LIVEAVATAR_COMPILE_THRESHOLD_SECONDS", "45"))
             base_seed = int(payload.get("seed") or os.getenv("LIVEAVATAR_BASE_SEED", "420"))
 
             log(
@@ -496,30 +503,43 @@ def process_job(job_id: str) -> None:
                 f"audio_duration={audio_duration:.2f}s, num_clip={num_clip}"
             )
 
+            runner, runner_cold_start, runner_acquire_duration = get_runner()
+            runner_jobs_before = runner.jobs_processed
             last_reported_progress = -1
             render_started_at = time.perf_counter()
+            clip_generation_started_at: Optional[float] = None
+            clip_generation_finished_at: Optional[float] = None
+            postprocess_started_at: Optional[float] = None
+            postprocess_finished_at: Optional[float] = None
 
             def on_render_progress(stage: str, clip_index: int, clip_total: int) -> None:
-                nonlocal last_reported_progress
+                nonlocal last_reported_progress, clip_generation_started_at
+                nonlocal clip_generation_finished_at, postprocess_started_at, postprocess_finished_at
                 progress = None
 
                 if stage == "clip_start":
+                    if clip_generation_started_at is None:
+                        clip_generation_started_at = time.perf_counter()
                     if clip_total <= 0:
                         return
                     progress = 1 if clip_index == 1 else max(
                         1, min(40, (40 * (clip_index - 1)) // clip_total))
                 elif stage == "clip_complete":
+                    clip_generation_finished_at = time.perf_counter()
                     if clip_total <= 0:
                         return
                     progress = max(1, min(40, (40 * clip_index) // clip_total))
                 elif stage == "postprocess_start":
+                    postprocess_started_at = time.perf_counter()
                     progress = 41
                 elif stage == "postprocess_clip_complete":
+                    postprocess_finished_at = time.perf_counter()
                     if clip_total <= 0:
                         progress = 80
                     else:
                         progress = max(41, min(80, 40 + (40 * clip_index) // clip_total))
                 elif stage == "postprocess_complete":
+                    postprocess_finished_at = time.perf_counter()
                     progress = 80
                 else:
                     return
@@ -557,8 +577,13 @@ def process_job(job_id: str) -> None:
                         f"(upscale {processed_seconds:.1f}/{total_seconds:.1f}s): {progress_exc}"
                     )
 
-            log(f"Job {job_id} render started")
-            get_runner().render(
+            log(
+                f"Job {job_id} render started "
+                f"(render_size={render_size}, output_size={output_size}, infer_frames={infer_frames}, "
+                f"num_clip={num_clip}, runner_cold_start={runner_cold_start}, "
+                f"runner_acquire={format_seconds(runner_acquire_duration)}, runner_jobs_before={runner_jobs_before})"
+            )
+            runner.render(
                 image_path=image_path,
                 audio_path=audio_path,
                 output_path=raw_video_path,
@@ -569,11 +594,34 @@ def process_job(job_id: str) -> None:
                 progress_callback=on_render_progress,
             )
             render_finished_at = time.perf_counter()
+            runner.jobs_processed += 1
+            clip_generation_duration = (
+                (clip_generation_finished_at - clip_generation_started_at)
+                if clip_generation_started_at is not None and clip_generation_finished_at is not None
+                else None
+            )
+            postprocess_duration = (
+                (postprocess_finished_at - postprocess_started_at)
+                if postprocess_started_at is not None and postprocess_finished_at is not None
+                else None
+            )
             log(
                 f"Job {job_id} render finished in {format_seconds(render_finished_at - render_started_at)} "
                 f"for {audio_duration:.1f}s of audio"
             )
-            get_runner().release_gpu_for_ffmpeg()
+            if runner_cold_start:
+                log(
+                    f"Job {job_id} runner cold start: pipeline_init={format_seconds(runner.init_duration)}, "
+                    f"runner_acquire={format_seconds(runner_acquire_duration)}"
+                )
+            if clip_generation_duration is not None:
+                log(
+                    f"Job {job_id} clip generation finished in {format_seconds(clip_generation_duration)} "
+                    f"for {num_clip} clips"
+                )
+            if postprocess_duration is not None:
+                log(f"Job {job_id} postprocess finished in {format_seconds(postprocess_duration)}")
+            runner.release_gpu_for_ffmpeg()
             upscale_started_at = time.perf_counter()
             log(f"Job {job_id} upscale started")
             normalize_video(
@@ -589,15 +637,29 @@ def process_job(job_id: str) -> None:
                 f"Job {job_id} upscale finished in {format_seconds(upscale_finished_at - upscale_started_at)} "
                 f"for {raw_duration:.1f}s of video"
             )
+            upload_started_at = time.perf_counter()
             log(f"Job {job_id} upload started")
             upload_video(upload["signed_url"], final_video_path)
             video_url = public_video_url(upload["path"])
             call_worker_api({"action": "complete", "job_id": job_id, "video_url": video_url})
+            upload_finished_at = time.perf_counter()
             total_elapsed = time.perf_counter() - job_started_at
             log(f"Job {job_id} upload finished")
             log(
                 f"Completed job {job_id}: {video_url} "
                 f"(total {format_seconds(total_elapsed)}, audio {audio_duration:.1f}s)"
+            )
+            log(
+                f"Job {job_id} summary: orientation={orientation}, render_size={render_size}, "
+                f"output_size={output_size}, audio={audio_duration:.1f}s, infer_frames={infer_frames}, "
+                f"num_clip={num_clip}, cold_start={runner_cold_start}, "
+                f"runner_acquire={format_seconds(runner_acquire_duration)}, "
+                f"pipeline_init={format_seconds(runner.init_duration) if runner_cold_start else '0.0s'}, "
+                f"render={format_seconds(render_finished_at - render_started_at)}, "
+                f"clip_generation={format_seconds(clip_generation_duration) if clip_generation_duration is not None else 'n/a'}, "
+                f"postprocess={format_seconds(postprocess_duration) if postprocess_duration is not None else 'n/a'}, "
+                f"upscale={format_seconds(upscale_finished_at - upscale_started_at)}, "
+                f"upload={format_seconds(upload_finished_at - upload_started_at)}"
             )
         except Exception as exc:
             error_text = str(exc)
@@ -637,7 +699,12 @@ def main() -> int:
     if not PYTHON_BIN.exists():
         raise RuntimeError(f"python not found: {PYTHON_BIN}")
 
-    log("SmartBlog LiveAvatar worker started")
+    log(
+        "SmartBlog LiveAvatar worker started "
+        f"(ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
+        f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*480')}, "
+        f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '480*832')})"
+    )
 
     while not STOP_REQUESTED:
         try:
