@@ -1,4 +1,5 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+import os
 import torch
 
 try:
@@ -20,6 +21,31 @@ __all__ = [
     'attention',
     'cudnn_attention_forward_with_lse'
 ]
+
+
+def _sdpa_fallback(q, k, v, q_lens=None, k_lens=None, dropout_p=0.0, causal=False, dtype=torch.bfloat16):
+    q_in = q
+    b, lq = q.shape[0], q.shape[1]
+    half_dtype = dtype
+    out = torch.zeros_like(q_in)
+    q_t = q.to(half_dtype).transpose(1, 2)
+    k_t = k.to(half_dtype).transpose(1, 2)
+    v_t = v.to(half_dtype).transpose(1, 2)
+
+    for idx in range(b):
+        q_len = int(q_lens[idx]) if q_lens is not None else lq
+        k_len = int(k_lens[idx]) if k_lens is not None else k.shape[1]
+        attn = torch.nn.functional.scaled_dot_product_attention(
+            q_t[idx:idx + 1, :, :q_len],
+            k_t[idx:idx + 1, :, :k_len],
+            v_t[idx:idx + 1, :, :k_len],
+            attn_mask=None,
+            is_causal=causal,
+            dropout_p=dropout_p,
+        )
+        out[idx, :q_len] = attn.transpose(1, 2).to(out.dtype)[0]
+
+    return out
 
 
 def cudnn_attention_forward_with_lse(
@@ -83,6 +109,18 @@ def flash_attention(
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
     assert q.device.type == 'cuda' and q.size(-1) <= 256
+    q_orig, k_orig, v_orig = q, k, v
+    if os.getenv("LIVEAVATAR_DISABLE_FLASH_ATTN", "true").lower() == "true":
+        return _sdpa_fallback(
+            q=q_orig,
+            k=k_orig,
+            v=v_orig,
+            q_lens=q_lens,
+            k_lens=k_lens,
+            dropout_p=dropout_p,
+            causal=causal,
+            dtype=dtype,
+        )
 
     # params
     b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype
@@ -122,40 +160,55 @@ def flash_attention(
         )
 
     # apply attention
-    if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
-        # Note: dropout_p, window_size are not supported in FA3 now.
-        x = flash_attn_interface.flash_attn_varlen_func(
-            q=q,
-            k=k,
-            v=v,
-            cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(
-                0, dtype=torch.int32).to(q.device, non_blocking=True),
-            cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(
-                0, dtype=torch.int32).to(q.device, non_blocking=True),
-            seqused_q=None,
-            seqused_k=None,
-            max_seqlen_q=lq,
-            max_seqlen_k=lk,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            deterministic=deterministic).unflatten(0, (b, lq))
-    else:
-        assert FLASH_ATTN_2_AVAILABLE
-        x = flash_attn.flash_attn_varlen_func(
-            q=q,
-            k=k,
-            v=v,
-            cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(
-                0, dtype=torch.int32).to(q.device, non_blocking=True),
-            cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(
-                0, dtype=torch.int32).to(q.device, non_blocking=True),
-            max_seqlen_q=lq,
-            max_seqlen_k=lk,
+    try:
+        if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
+            # Note: dropout_p, window_size are not supported in FA3 now.
+            x = flash_attn_interface.flash_attn_varlen_func(
+                q=q,
+                k=k,
+                v=v,
+                cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(
+                    0, dtype=torch.int32).to(q.device, non_blocking=True),
+                cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(
+                    0, dtype=torch.int32).to(q.device, non_blocking=True),
+                seqused_q=None,
+                seqused_k=None,
+                max_seqlen_q=lq,
+                max_seqlen_k=lk,
+                softmax_scale=softmax_scale,
+                causal=causal,
+                deterministic=deterministic).unflatten(0, (b, lq))
+        else:
+            assert FLASH_ATTN_2_AVAILABLE
+            x = flash_attn.flash_attn_varlen_func(
+                q=q,
+                k=k,
+                v=v,
+                cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(
+                    0, dtype=torch.int32).to(q.device, non_blocking=True),
+                cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(
+                    0, dtype=torch.int32).to(q.device, non_blocking=True),
+                max_seqlen_q=lq,
+                max_seqlen_k=lk,
+                dropout_p=dropout_p,
+                softmax_scale=softmax_scale,
+                causal=causal,
+                window_size=window_size,
+                deterministic=deterministic).unflatten(0, (b, lq))
+    except RuntimeError as exc:
+        if "no kernel image is available" not in str(exc):
+            raise
+        warnings.warn("FlashAttention kernel is unavailable on this GPU; falling back to PyTorch SDPA.")
+        x = _sdpa_fallback(
+            q=q_orig,
+            k=k_orig,
+            v=v_orig,
+            q_lens=q_lens,
+            k_lens=k_lens,
             dropout_p=dropout_p,
-            softmax_scale=softmax_scale,
             causal=causal,
-            window_size=window_size,
-            deterministic=deterministic).unflatten(0, (b, lq))
+            dtype=dtype,
+        )
 
     # output
     return x.type(out_dtype)
@@ -177,6 +230,8 @@ def attention(
     fa_version=None,
 ):
     def cudnn_require():
+        if os.getenv("LIVEAVATAR_DISABLE_CUDNN_ATTN", "true").lower() == "true":
+            return False
         if window_size != (-1, -1):
             return False
         if not q.shape[-1] <= 256:

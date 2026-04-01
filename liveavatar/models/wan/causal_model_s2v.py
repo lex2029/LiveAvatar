@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
+import os
 import types
 from copy import deepcopy
 
@@ -52,6 +53,28 @@ from liveavatar.models.wan.inference_utils import conditional_compile
 # change to reduce-overhead for better distributed training performance
 # flex_attention = torch.compile(
 #     flex_attention, dynamic=False, mode="max-autotune")
+
+
+def _ensure_cond_cache_capacity(kv_cache, required_size):
+    current_size = kv_cache["cond_k"].shape[1]
+    if required_size <= current_size:
+        return
+
+    new_size = max(required_size, int(current_size * 1.5))
+    cond_k = torch.zeros(
+        [kv_cache["cond_k"].shape[0], new_size, kv_cache["cond_k"].shape[2], kv_cache["cond_k"].shape[3]],
+        dtype=kv_cache["cond_k"].dtype,
+        device=kv_cache["cond_k"].device,
+    )
+    cond_v = torch.zeros(
+        [kv_cache["cond_v"].shape[0], new_size, kv_cache["cond_v"].shape[2], kv_cache["cond_v"].shape[3]],
+        dtype=kv_cache["cond_v"].dtype,
+        device=kv_cache["cond_v"].device,
+    )
+    cond_k[:, :current_size] = kv_cache["cond_k"]
+    cond_v[:, :current_size] = kv_cache["cond_v"]
+    kv_cache["cond_k"] = cond_k
+    kv_cache["cond_v"] = cond_v
 
 
 def sp_attn_forward_s2v(self,
@@ -169,6 +192,7 @@ def sp_attn_forward_s2v(self,
                     )
             elif global_seg_idx[2]-global_seg_idx[1] > 0: #prefill cond caching
                 # assert False, "not implemented for prefill sp"
+                _ensure_cond_cache_capacity(kv_cache, global_seg_idx[2]-global_seg_idx[1])
                 kv_cache["cond_end"][0] = max(int(kv_cache["cond_end"]), global_seg_idx[2]-global_seg_idx[1])
                 kv_cache["cond_k"][:, :int(kv_cache["cond_end"]), head_start_rank:head_end_rank] = k[:,global_seg_idx[1]:global_seg_idx[2]]
                 kv_cache["cond_v"][:, :int(kv_cache["cond_end"]), head_start_rank:head_end_rank] = v[:,global_seg_idx[1]:global_seg_idx[2]]
@@ -241,11 +265,27 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
+        attn_out_chunk_size = int(os.getenv("LIVEAVATAR_ATTN_OUT_CHUNK_SIZE", "128"))
+        qkv_chunk_size = int(os.getenv("LIVEAVATAR_QKV_CHUNK_SIZE", "128"))
         # query, key, value function
         def qkv_fn(x):
-            q = self.norm_q(self.q(x)).view(b, s, n, d)
-            k = self.norm_k(self.k(x)).view(b, s, n, d)
-            v = self.v(x).view(b, s, n, d)
+            if qkv_chunk_size > 0 and s > qkv_chunk_size:
+                q = x.new_empty((b, s, n, d))
+                k = x.new_empty((b, s, n, d))
+                v = x.new_empty((b, s, n, d))
+                for start in range(0, s, qkv_chunk_size):
+                    end = min(s, start + qkv_chunk_size)
+                    x_chunk = x[:, start:end]
+                    q[:, start:end] = self.norm_q(self.q(x_chunk)).view(
+                        b, end - start, n, d)
+                    k[:, start:end] = self.norm_k(self.k(x_chunk)).view(
+                        b, end - start, n, d)
+                    v[:, start:end] = self.v(x_chunk).view(
+                        b, end - start, n, d)
+            else:
+                q = self.norm_q(self.q(x)).view(b, s, n, d)
+                k = self.norm_k(self.k(x)).view(b, s, n, d)
+                v = self.v(x).view(b, s, n, d)
             return q, k, v
         q, k, v = qkv_fn(x)
         
@@ -302,20 +342,24 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
 
                 kv_cache["k"][:, current_start:(current_start+seg_len_block)] = roped_key[:,seg_idx[0]:seg_idx[1]]
                 kv_cache["v"][:, current_start:(current_start+seg_len_block)] = v[:,seg_idx[0]:seg_idx[1]]
+                active_k = kv_cache["k"][:, active_kv_cache_start:active_kv_cache_size].to(dtype=v.dtype)
+                active_v = kv_cache["v"][:, active_kv_cache_start:active_kv_cache_size].to(dtype=v.dtype)
+                active_cond_k = kv_cache["cond_k"][:, :active_cond_cache_size].to(dtype=v.dtype)
+                active_cond_v = kv_cache["cond_v"][:, :active_cond_cache_size].to(dtype=v.dtype)
                 x = attention(
                     q=roped_query[:,seg_idx[0]:seg_idx[1]],
                     k=torch.cat(
                                 [
-                                kv_cache["k"][:, active_kv_cache_start:active_kv_cache_size],
+                                active_k,
                                 causal_rope_apply_cond(
-                                    kv_cache["cond_k"][:, :active_cond_cache_size], None, freqs_cond
+                                    active_cond_k, None, freqs_cond
                                     ).type_as(v)
                                 ],dim=1
                                 ),
                     v=torch.cat(
                                 [
-                                kv_cache["v"][:, active_kv_cache_start:active_kv_cache_size],
-                                kv_cache["cond_v"][:, :active_cond_cache_size]
+                                active_v,
+                                active_cond_v
                                 ],dim=1
                                 ),
                     k_lens=torch.tensor(active_kv_cache_size - active_kv_cache_start + active_cond_cache_size).repeat(b),
@@ -324,15 +368,18 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
             elif seg_idx[2]-seg_idx[1] > 0: #prefill cond caching
                 roped_query = causal_rope_apply_cond(
                     q, grid_sizes, freqs).type_as(v) #grid_sizes不参与计算
+                _ensure_cond_cache_capacity(kv_cache, seg_idx[2]-seg_idx[1])
                 kv_cache["cond_end"][0] = max(int(kv_cache["cond_end"]), seg_idx[2]-seg_idx[1])
                 kv_cache["cond_k"][:, :int(kv_cache["cond_end"])] = k[:,seg_idx[1]:seg_idx[2]]
                 kv_cache["cond_v"][:, :int(kv_cache["cond_end"])] = v[:,seg_idx[1]:seg_idx[2]]
+                cond_k = kv_cache["cond_k"][:, :int(kv_cache["cond_end"])].to(dtype=v.dtype)
+                cond_v = kv_cache["cond_v"][:, :int(kv_cache["cond_end"])].to(dtype=v.dtype)
                 x = attention(
                     q=roped_query[:,seg_idx[1]:seg_idx[2]],
                     k=causal_rope_apply_cond(
-                            k, grid_sizes, freqs
-                        ).type_as(v)[:,:int(kv_cache["cond_end"])],
-                    v=kv_cache["cond_v"][:, :int(kv_cache["cond_end"])],
+                            cond_k, None, freqs
+                        ).type_as(v),
+                    v=cond_v,
                     k_lens=torch.tensor(int(kv_cache["cond_end"])).repeat(b),
                     window_size=self.window_size
                 )
@@ -341,7 +388,13 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
 
         # output
         x = x.flatten(2)
-        x = self.o(x)
+        if attn_out_chunk_size > 0 and x.shape[1] > attn_out_chunk_size:
+            for start in range(0, x.shape[1], attn_out_chunk_size):
+                end = start + attn_out_chunk_size
+                chunk_out = self.o(x[:, start:end])
+                x[:, start:end] = chunk_out
+        else:
+            x = self.o(x)
         return x
 
 
@@ -418,17 +471,51 @@ class CausalWanS2VAttentionBlock(WanAttentionBlock):
             y = y * e[2]
             x = x + y
 
+        ffn_chunk_size = int(os.getenv("LIVEAVATAR_FFN_CHUNK_SIZE", "256"))
+        cross_attn_chunk_size = int(
+            os.getenv("LIVEAVATAR_CROSS_ATTN_CHUNK_SIZE", str(ffn_chunk_size)))
+
+        def apply_ffn_chunked(tensor):
+            if ffn_chunk_size <= 0 or tensor.shape[1] <= ffn_chunk_size:
+                return self.ffn(tensor)
+
+            outputs = []
+            for start in range(0, tensor.shape[1], ffn_chunk_size):
+                end = start + ffn_chunk_size
+                outputs.append(self.ffn(tensor[:, start:end]))
+            return torch.cat(outputs, dim=1)
+
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
-            x = x + self.cross_attn(self.norm3(x.to(torch.bfloat16)).type_as(bf_dtype_tensor), context, context_lens)
-            norm2_x = self.norm2(x).float()
-            norm2_x = norm2_x * (1+e[4]) + e[3]
-            
-            y = self.ffn(norm2_x.type_as(bf_dtype_tensor))
-
-            with amp.autocast(dtype=torch.float32):
-                y = y * e[5]
-                x = x + y
+            if cross_attn_chunk_size <= 0 or x.shape[1] <= cross_attn_chunk_size:
+                x = x + self.cross_attn(
+                    self.norm3(x.to(torch.bfloat16)).type_as(bf_dtype_tensor),
+                    context,
+                    context_lens,
+                )
+            else:
+                for start in range(0, x.shape[1], cross_attn_chunk_size):
+                    end = start + cross_attn_chunk_size
+                    norm3_chunk = self.norm3(x[:, start:end].to(torch.bfloat16)).type_as(
+                        bf_dtype_tensor)
+                    chunk_out = self.cross_attn(norm3_chunk, context, context_lens)
+                    x[:, start:end] = x[:, start:end] + chunk_out
+            if ffn_chunk_size <= 0 or x.shape[1] <= ffn_chunk_size:
+                norm2_x = self.norm2(x).float()
+                norm2_x = norm2_x * (1+e[4]) + e[3]
+                y = self.ffn(norm2_x.type_as(bf_dtype_tensor))
+                with amp.autocast(dtype=torch.float32):
+                    y = y * e[5]
+                    x = x + y
+            else:
+                for start in range(0, x.shape[1], ffn_chunk_size):
+                    end = start + ffn_chunk_size
+                    norm2_chunk = self.norm2(x[:, start:end]).float()
+                    norm2_chunk = norm2_chunk * (1 + e[4][:, start:end]) + e[3][:, start:end]
+                    y_chunk = self.ffn(norm2_chunk.type_as(bf_dtype_tensor))
+                    with amp.autocast(dtype=torch.float32):
+                        y_chunk = y_chunk * e[5][:, start:end]
+                        x[:, start:end] = x[:, start:end] + y_chunk
             return x
 
         x = cross_attn_ffn(x, context, context_lens, e).type_as(bf_dtype_tensor)
