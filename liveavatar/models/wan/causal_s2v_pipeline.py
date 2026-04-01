@@ -112,6 +112,7 @@ class WanS2V:
         self.drop_part_motion_frames = drop_part_motion_frames
         self.single_gpu = single_gpu
         self.offload_kv_cache = offload_kv_cache
+        self.kv_cache_dtype = self._resolve_kv_cache_dtype()
         if t5_fsdp or dit_fsdp or use_sp:
             self.init_on_cpu = False
 
@@ -192,6 +193,28 @@ class WanS2V:
         self.drop_first_motion = config.drop_first_motion
         self.fps = config.sample_fps
         self.audio_sample_m = 0
+
+    def _resolve_kv_cache_dtype(self):
+        dtype_name = os.getenv("LIVEAVATAR_KV_CACHE_DTYPE", "").strip().lower()
+        if not dtype_name:
+            if self.single_gpu and not self.offload_kv_cache and hasattr(torch, "float8_e4m3fn"):
+                return torch.float8_e4m3fn
+            return self.param_dtype
+
+        dtype_map = {
+            "bf16": torch.bfloat16,
+            "bfloat16": torch.bfloat16,
+            "fp16": torch.float16,
+            "float16": torch.float16,
+        }
+        if hasattr(torch, "float8_e4m3fn"):
+            dtype_map["fp8"] = torch.float8_e4m3fn
+            dtype_map["float8"] = torch.float8_e4m3fn
+            dtype_map["float8_e4m3fn"] = torch.float8_e4m3fn
+        if hasattr(torch, "float8_e5m2"):
+            dtype_map["float8_e5m2"] = torch.float8_e5m2
+
+        return dtype_map.get(dtype_name, self.param_dtype)
     
     def add_lora_to_model(self, model, lora_rank=4, lora_alpha=4, lora_target_modules="q,k,v,o,ffn.0,ffn.2", init_lora_weights="kaiming", pretrained_lora_path=None, state_dict_converter=None, load_only=False, load_lora_weight_only=False):
         if not load_only:
@@ -605,11 +628,12 @@ class WanS2V:
         """
         device =("cpu" if self.offload_kv_cache else f"cuda:{0}")  if self.single_gpu else device
         kv_cache1 = []
+        cache_dtype = dtype if self.offload_kv_cache else self.kv_cache_dtype
 
         for layer_idx in range(self.noise_model.num_layers):
             layer_cache = {
-                "k": torch.zeros([batch_size, kv_cache_size, 40, 128], dtype=dtype, device=device),
-                "v": torch.zeros([batch_size, kv_cache_size, 40, 128], dtype=dtype, device=device),
+                "k": torch.zeros([batch_size, kv_cache_size, 40, 128], dtype=cache_dtype, device=device),
+                "v": torch.zeros([batch_size, kv_cache_size, 40, 128], dtype=cache_dtype, device=device),
             }
             
             if not self.offload_kv_cache and hasattr(self, 'shared_cond_cache') and self.shared_cond_cache is not None:
@@ -617,8 +641,8 @@ class WanS2V:
                 layer_cache["cond_v"] = self.shared_cond_cache[layer_idx]["cond_v"]
                 layer_cache["cond_end"] = self.shared_cond_cache[layer_idx]["cond_end"]
             else:
-                layer_cache["cond_k"] = torch.zeros([batch_size, 2800, 40, 128], dtype=dtype, device=device)
-                layer_cache["cond_v"] = torch.zeros([batch_size, 2800, 40, 128], dtype=dtype, device=device)
+                layer_cache["cond_k"] = torch.zeros([batch_size, 2800, 40, 128], dtype=cache_dtype, device=device)
+                layer_cache["cond_v"] = torch.zeros([batch_size, 2800, 40, 128], dtype=cache_dtype, device=device)
                 layer_cache["cond_end"] = torch.tensor([0], dtype=torch.long, device=device)
             
             kv_cache1.append(layer_cache)
@@ -690,6 +714,7 @@ class WanS2V:
         mask=None,
         input_video_for_sam2=None,
         enable_online_decode=False,
+        progress_callback=None,
     ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -739,13 +764,19 @@ class WanS2V:
         """
         # ------------------------------------Step 1: prepare conditional inputs--------------------------------------
 
+        requested_size = None
+        if generate_size is not None:
+            if isinstance(generate_size, str):
+                requested_size = tuple(map(int, generate_size.split('*')))
+            else:
+                requested_size = tuple(generate_size)
+
         size = self.get_gen_size(
-            size=None,
+            size=requested_size,
             max_area=max_area,
             ref_image_path=ref_image_path,
             pre_video_path=None)
         HEIGHT, WIDTH = size
-        # HEIGHT, WIDTH = map(int, generate_size.split('*'))
         # size = (HEIGHT, WIDTH)
         channel = 3
 
@@ -933,10 +964,20 @@ class WanS2V:
             out = []
             clip_outputs = []
             self.kv_cache1 = None
-            self.shared_cond_cache = None  
+            self.shared_cond_cache = None
+            cache_slot_count = max(1, int(sampling_steps))
             active_nr = min(max_repeat, num_repeat)
             for r in range(active_nr):
             #-------------------------------------------rollout loop------------------------------------------------------
+                if progress_callback is not None:
+                    try:
+                        progress_callback("clip_start", r + 1, active_nr)
+                    except Exception:
+                        pass
+                print(
+                    f"clip progress: starting clip {r + 1}/{active_nr}",
+                    flush=True,
+                )
                 #----------------------------------------------Step 2.1: clip-level init------------------------------------------------------      
                 seed_g = torch.Generator(device=self.device)
                 seed_g.manual_seed(seed + r)
@@ -971,14 +1012,14 @@ class WanS2V:
                         cond_device = f"cuda:{0}" if self.single_gpu else f"cuda:{0}"
                         for _ in range(self.noise_model.num_layers):
                             self.shared_cond_cache.append({
-                                "cond_k": torch.zeros([1, 2800, 40, 128], dtype=self.param_dtype, device=cond_device),
-                                "cond_v": torch.zeros([1, 2800, 40, 128], dtype=self.param_dtype, device=cond_device),
+                                "cond_k": torch.zeros([1, 2800, 40, 128], dtype=self.kv_cache_dtype, device=cond_device),
+                                "cond_v": torch.zeros([1, 2800, 40, 128], dtype=self.kv_cache_dtype, device=cond_device),
                                 "cond_end": torch.tensor([0], dtype=torch.long, device=cond_device)
                             })
                     else:
                         self.shared_cond_cache = None
                     
-                    for gpu_id in range(4):
+                    for gpu_id in range(cache_slot_count):
                         self._initialize_kv_cache(
                             batch_size=1,
                             dtype=self.param_dtype,
@@ -1013,7 +1054,7 @@ class WanS2V:
                 #-----------------------------------------------Temporal denoising loop in single clip---------------------------------
                 # 2.2.0 prefill cond caching
                 if r==0 or (r==1 and enable_online_decode):
-                    for gpu_id in range(4):
+                    for gpu_id in range(cache_slot_count):
                         self._move_kv_cache_to_working_gpu(gpu_id+1) # move to gpu0
 
                         block_index = 0
@@ -1107,13 +1148,13 @@ class WanS2V:
                     if offload_model:
                         print(f"offloading model to cpu, please wait...")
                         self.noise_model.cpu()
-                        self.vae.model.to(self.device)
                         torch.cuda.synchronize()
                         torch.cuda.empty_cache()
                     ref_latents = clip_output.unsqueeze(0)[:, :, 0:1]
                     decode_latents = torch.cat(
                         [motion_latents, clip_output.unsqueeze(0)], dim=2
                     )
+                    self.vae.model.to(decode_latents.device)
                     image = torch.stack(self.vae.decode(decode_latents))
                     image = image[:, :, -(infer_frames):]
                     image = image[:, :, 3:]
@@ -1141,16 +1182,30 @@ class WanS2V:
                 else:
                     clip_outputs.append(clip_output.detach().cpu())
 
+                print(
+                    f"clip progress: completed clip {r + 1}/{active_nr}",
+                    flush=True,
+                )
+                if progress_callback is not None:
+                    try:
+                        progress_callback("clip_complete", r + 1, active_nr)
+                    except Exception:
+                        pass
+
         #-------------------------------------- Step 3: full-video postprocess (deferred VAE decode for r>=1)--------------------------------------
         print(f"complete full-sequence generation")
         if clip_outputs:
+            if progress_callback is not None:
+                try:
+                    progress_callback("postprocess_start", 0, len(clip_outputs))
+                except Exception:
+                    pass
             if offload_model:
                 print(
                     f"loading VAE to cuda for final decode of remaining clips"
                 )
                 self.kv_cache1 = None
                 # self.noise_model.cpu()
-                self.vae.model.to(self.device)
                 torch.cuda.synchronize()
                 torch.cuda.empty_cache()
 
@@ -1163,6 +1218,7 @@ class WanS2V:
                     [motion_latents_pp, clip_output.unsqueeze(0)], dim=2
                 )
 
+                self.vae.model.to(decode_latents.device)
                 image = torch.stack(self.vae.decode(decode_latents))
                 image = image[:, :, -(infer_frames):]
                 
@@ -1184,8 +1240,22 @@ class WanS2V:
                     self.vae.encode(videos_last_frames)
                 ).type_as(clip_output)
                 out.append(image.cpu())
+                if progress_callback is not None:
+                    try:
+                        progress_callback(
+                            "postprocess_clip_complete",
+                            clip_idx + 1,
+                            len(clip_outputs),
+                        )
+                    except Exception:
+                        pass
 
         videos = torch.cat(out, dim=2)
+        if progress_callback is not None:
+            try:
+                progress_callback("postprocess_complete", 1, 1)
+            except Exception:
+                pass
         del clip_noise, clip_latents, clip_output, block_latents
         self._sampler_timesteps = None
         self._sampler_sigmas = None

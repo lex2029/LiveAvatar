@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
+import os
 import types
 from copy import deepcopy
 
@@ -64,55 +65,79 @@ def torch_dfs(model: nn.Module, parent_name='root'):
 @conditional_compile
 def rope_apply(x, grid_sizes, freqs, start=None):
     n, c = x.size(2), x.size(3) // 2
-    # loop over samples
-    output = []
+    x_out = x
+    rope_chunk_size = int(os.getenv("LIVEAVATAR_ROPE_CHUNK_SIZE", "256"))
     for i, _ in enumerate(x):
         s = x.size(1)
-        x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(
-            s, n, -1, 2))
-        freqs_i = freqs[i, :s]
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, s:]])
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).float()
+        if rope_chunk_size <= 0 or s <= rope_chunk_size:
+            x_i = torch.view_as_complex(x[i, :s].to(torch.float32).reshape(
+                s, n, -1, 2))
+            freqs_i = freqs[i, :s]
+            x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+            x_out[i, :s] = x_i.to(dtype=x.dtype)
+            continue
+
+        for chunk_start in range(0, s, rope_chunk_size):
+            chunk_end = min(s, chunk_start + rope_chunk_size)
+            x_i = torch.view_as_complex(
+                x[i, chunk_start:chunk_end].to(torch.float32).reshape(
+                    chunk_end - chunk_start, n, -1, 2))
+            freqs_i = freqs[i, chunk_start:chunk_end]
+            x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+            x_out[i, chunk_start:chunk_end] = x_i.to(dtype=x.dtype)
+    return x_out
 
 @amp.autocast(enabled=False)
 @conditional_compile
 def rope_apply_cond(x, grid_sizes, freqs, start=None):
     n, c = x.size(2), x.size(3) // 2
-    # loop over samples
-    output = []
+    x_out = x
+    rope_chunk_size = int(os.getenv("LIVEAVATAR_ROPE_CHUNK_SIZE", "256"))
     for i, _ in enumerate(x):
         s = x.size(1)
-        x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(
-            s, n, -1, 2))
-        freqs_i = freqs[i, :s]
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, s:]])
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).float()
+        if rope_chunk_size <= 0 or s <= rope_chunk_size:
+            x_i = torch.view_as_complex(x[i, :s].to(torch.float32).reshape(
+                s, n, -1, 2))
+            freqs_i = freqs[i, :s]
+            x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+            x_out[i, :s] = x_i.to(dtype=x.dtype)
+            continue
+
+        for chunk_start in range(0, s, rope_chunk_size):
+            chunk_end = min(s, chunk_start + rope_chunk_size)
+            x_i = torch.view_as_complex(
+                x[i, chunk_start:chunk_end].to(torch.float32).reshape(
+                    chunk_end - chunk_start, n, -1, 2))
+            freqs_i = freqs[i, chunk_start:chunk_end]
+            x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+            x_out[i, chunk_start:chunk_end] = x_i.to(dtype=x.dtype)
+    return x_out
     
 @amp.autocast(enabled=False)
 def rope_apply_usp(x, grid_sizes, freqs):
     s, n, c = x.size(1), x.size(2), x.size(3) // 2
-    # loop over samples
-    output = []
+    x_out = x
+    rope_chunk_size = int(os.getenv("LIVEAVATAR_ROPE_CHUNK_SIZE", "256"))
     for i, _ in enumerate(x):
         s = x.size(1)
-        # precompute multipliers
-        x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(
-            s, n, -1, 2))
-        freqs_i = freqs[i]
-        freqs_i_rank = freqs_i
-        x_i = torch.view_as_real(x_i * freqs_i_rank).flatten(2)
-        x_i = torch.cat([x_i, x[i, s:]])
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).float()
+        if rope_chunk_size <= 0 or s <= rope_chunk_size:
+            x_i = torch.view_as_complex(x[i, :s].to(torch.float32).reshape(
+                s, n, -1, 2))
+            freqs_i = freqs[i]
+            freqs_i_rank = freqs_i
+            x_i = torch.view_as_real(x_i * freqs_i_rank).flatten(2)
+            x_out[i, :s] = x_i.to(dtype=x.dtype)
+            continue
+
+        for chunk_start in range(0, s, rope_chunk_size):
+            chunk_end = min(s, chunk_start + rope_chunk_size)
+            x_i = torch.view_as_complex(
+                x[i, chunk_start:chunk_end].to(torch.float32).reshape(
+                    chunk_end - chunk_start, n, -1, 2))
+            freqs_i_rank = freqs[i, chunk_start:chunk_end]
+            x_i = torch.view_as_real(x_i * freqs_i_rank).flatten(2)
+            x_out[i, chunk_start:chunk_end] = x_i.to(dtype=x.dtype)
+    return x_out
 
 
 def sp_attn_forward_s2v(self,

@@ -1,0 +1,16 @@
+[Unit]
+Description=SmartBlog LiveAvatar Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/LiveAvatar
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -lc 'source /root/LiveAvatar/.venv/bin/activate && exec python /root/LiveAvatar/smartblog_worker.py'
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
