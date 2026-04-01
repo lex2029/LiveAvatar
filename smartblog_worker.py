@@ -154,6 +154,31 @@ def detect_orientation(image_path: Path) -> str:
     return "landscape" if width >= height else "portrait"
 
 
+def resize_image_to_render_aspect(image_path: Path, render_size: str) -> None:
+    target_height, target_width = map(int, render_size.split("*"))
+    target_aspect = target_width / float(target_height)
+    with Image.open(image_path) as image:
+        image = image.convert("RGB")
+        src_width, src_height = image.size
+        src_aspect = src_width / float(src_height)
+        if abs(src_aspect - target_aspect) < 1e-4:
+            return
+
+        if src_aspect > target_aspect:
+            new_width = max(1, int(round(src_height * target_aspect)))
+            new_height = src_height
+        else:
+            new_width = src_width
+            new_height = max(1, int(round(src_width / target_aspect)))
+
+        resized = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        resized.save(image_path)
+        log(
+            f"Resized avatar to render aspect {render_size}: "
+            f"{src_width}x{src_height} -> {new_width}x{new_height}"
+        )
+
+
 def orientation_to_render_size(orientation: str) -> str:
     if orientation == "landscape":
         return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "720*1280")
@@ -518,6 +543,7 @@ def process_job(job_id: str) -> None:
             is_free_plan = plan_key == "free"
             render_size = orientation_to_free_render_size(orientation) if is_free_plan else orientation_to_render_size(orientation)
             output_size = orientation_to_output_size(orientation)
+            resize_image_to_render_aspect(image_path, render_size)
             prompt = choose_prompt(payload)
             infer_frames = int(os.getenv("LIVEAVATAR_INFER_FRAMES", "48"))
             sample_fps = 25
