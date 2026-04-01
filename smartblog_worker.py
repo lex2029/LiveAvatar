@@ -150,6 +150,11 @@ def detect_orientation(image_path: Path) -> str:
     return "landscape" if width >= height else "portrait"
 
 
+def parse_hw_size(size: str) -> tuple[int, int]:
+    height, width = map(int, size.split("*"))
+    return height, width
+
+
 def orientation_to_render_size(orientation: str) -> str:
     if orientation == "landscape":
         return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "720*1280")
@@ -177,6 +182,35 @@ def compute_num_clip(audio_duration: float, infer_frames: int, fps: int) -> int:
     minimum = int(os.getenv("LIVEAVATAR_MIN_NUM_CLIP", "1"))
     maximum = int(os.getenv("LIVEAVATAR_MAX_NUM_CLIP", "120"))
     return max(minimum, min(raw, maximum))
+
+
+def crop_image_to_render_aspect(image_path: Path, render_size: str) -> None:
+    target_height, target_width = parse_hw_size(render_size)
+    target_aspect = target_width / float(target_height)
+
+    with Image.open(image_path) as image:
+        image = image.convert("RGB")
+        src_width, src_height = image.size
+        src_aspect = src_width / float(src_height)
+
+        if abs(src_aspect - target_aspect) < 1e-4:
+            return
+
+        if src_aspect > target_aspect:
+            cropped_width = max(1, int(round(src_height * target_aspect)))
+            left = max(0, (src_width - cropped_width) // 2)
+            box = (left, 0, left + cropped_width, src_height)
+        else:
+            cropped_height = max(1, int(round(src_width / target_aspect)))
+            top = max(0, (src_height - cropped_height) // 2)
+            box = (0, top, src_width, top + cropped_height)
+
+        cropped = image.crop(box)
+        cropped.save(image_path)
+        log(
+            f"Cropped avatar to match render aspect {render_size}: "
+            f"{src_width}x{src_height} -> {cropped.width}x{cropped.height}"
+        )
 
 
 def random_suffix(length: int = 8) -> str:
@@ -491,6 +525,7 @@ def process_job(job_id: str) -> None:
 
             render_size = orientation_to_render_size(orientation)
             output_size = orientation_to_output_size(orientation)
+            crop_image_to_render_aspect(image_path, render_size)
             prompt = choose_prompt(payload)
             infer_frames = int(os.getenv("LIVEAVATAR_INFER_FRAMES", "48"))
             sample_fps = 25
