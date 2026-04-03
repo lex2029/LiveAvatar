@@ -921,6 +921,15 @@ def runtime_paths() -> Dict[str, str]:
     }
 
 
+def runtime_tunables(poll_interval: float, idle_log_interval: float) -> Dict[str, float]:
+    return {
+        "poll_interval_s": poll_interval,
+        "idle_log_interval_s": idle_log_interval,
+        "worker_api_timeout_s": 60.0,
+        "download_timeout_s": 300.0,
+    }
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -1027,6 +1036,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "runtime_dependencies": runtime_dependency_flags(),
         "paths": runtime_paths(),
         "storage": runtime_storage_info(),
+        "tunables": runtime_tunables(poll_interval, idle_log_interval),
         "media_tools": {
             "ffmpeg_version": command_version("ffmpeg"),
             "ffprobe_version": command_version("ffprobe"),
@@ -1035,8 +1045,6 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "render_sizes": render_size_config(),
         "profiles": runtime_profile_config(),
         "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
-        "poll_interval_s": poll_interval,
-        "idle_log_interval_s": idle_log_interval,
     }
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
         payload["poll_skipped"] = True
