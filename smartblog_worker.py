@@ -869,6 +869,43 @@ def run_healthcheck(poll_interval: float, idle_log_interval: float) -> int:
         return 1
 
 
+def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
+    payload: Dict[str, Any] = {
+        "git_commit": git_commit_short(),
+        "git_branch": git_branch_name(),
+        "git_dirty": git_is_dirty(),
+        "worker_host": worker_host(),
+        "worker_pid": worker_pid(),
+        "cuda_visible_devices": worker_cuda_visible_devices(),
+        "cuda_available": worker_cuda_available(),
+        "cuda_device_count": worker_cuda_device_count(),
+        "worker_api_host": worker_api_host(),
+        "runtime_dependencies": runtime_dependency_summary(),
+        "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
+        "poll_interval_s": poll_interval,
+        "idle_log_interval_s": idle_log_interval,
+    }
+    if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
+        payload["poll_skipped"] = True
+        payload["poll_error"] = "worker API env is incomplete"
+        print(json.dumps(payload, sort_keys=True), flush=True)
+        return 0
+    try:
+        poll_started_at = time.perf_counter()
+        job_ids = initial_poll()
+        poll_duration = time.perf_counter() - poll_started_at
+        payload["poll_skipped"] = False
+        payload["jobs"] = len(job_ids)
+        payload["poll_s"] = round(poll_duration, 3)
+        print(json.dumps(payload, sort_keys=True), flush=True)
+        return 0
+    except Exception as exc:
+        payload["poll_skipped"] = False
+        payload["poll_error"] = str(exc)
+        print(json.dumps(payload, sort_keys=True), flush=True)
+        return 1
+
+
 def normalize_video(
     input_path: Path,
     output_path: Path,
@@ -1285,6 +1322,7 @@ def main() -> int:
     idle_log_interval = float(os.getenv("WORKER_IDLE_LOG_INTERVAL_SECONDS", "300"))
     once = "--once" in sys.argv
     healthcheck = "--healthcheck" in sys.argv
+    healthcheck_json = "--healthcheck-json" in sys.argv
     last_idle_log_at = 0.0
     consecutive_poll_errors = 0
     last_poll_error_at: Optional[float] = None
@@ -1296,6 +1334,8 @@ def main() -> int:
 
     log(f"SmartBlog LiveAvatar worker started ({startup_summary(poll_interval, idle_log_interval)})")
 
+    if healthcheck_json:
+        return run_healthcheck_json(poll_interval, idle_log_interval)
     if healthcheck:
         return run_healthcheck(poll_interval, idle_log_interval)
 
