@@ -1285,6 +1285,35 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "worker_api_http": worker_api_http_probe(),
         "runner_state": runner_state_info(),
     }
+    runtime_dependencies = payload["runtime_dependencies"]
+    storage = payload["storage"]
+    api_dns = payload["worker_api_dns"]
+    api_connectivity = payload["worker_api_connectivity"]
+    api_http = payload["worker_api_http"]
+    compile_runtime = payload["compile_runtime"]
+    media_tools = payload["media_tools"]
+    health_checks = {
+        "api_env_ready": bool(
+            runtime_dependencies["supabase_url_ready"] and runtime_dependencies["worker_api_key_ready"]
+        ),
+        "api_dns_ready": bool(api_dns["resolved"]),
+        "api_tcp_ready": bool(api_connectivity["reachable"]),
+        "api_http_ready": bool(api_http["ok"]),
+        "media_ready": bool(runtime_dependencies["ffmpeg_ready"] and runtime_dependencies["ffprobe_ready"]),
+        "nvenc_ready": bool(media_tools["h264_nvenc_available"]),
+        "model_ready": bool(runtime_dependencies["wan_ckpt_ready"] and runtime_dependencies["lora_ready"]),
+        "python_runtime_ready": bool(runtime_dependencies["python_ready"] and runtime_dependencies["torchrun_ready"]),
+        "storage_writable": bool(
+            storage["repo_writable"] and storage["tmp_writable"] and storage["generated_assets_writable"]
+        ),
+        "compile_runtime_ready": bool(
+            compile_runtime["torch_compile_available"]
+            and compile_runtime["inductor_available"]
+            and compile_runtime["triton_available"]
+        ),
+    }
+    payload["health_checks"] = health_checks
+    payload["overall_ok"] = all(health_checks.values())
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
         payload["poll_skipped"] = True
         payload["poll_error"] = "worker API env is incomplete"
