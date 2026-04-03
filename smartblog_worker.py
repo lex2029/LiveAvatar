@@ -1239,6 +1239,16 @@ def runtime_save_paths() -> Dict[str, str]:
     }
 
 
+def healthcheck_policy() -> Dict[str, Any]:
+    allowed_branches_raw = os.getenv("HEALTHCHECK_ALLOWED_BRANCHES", "main")
+    allowed_branches = [branch.strip() for branch in allowed_branches_raw.split(",") if branch.strip()]
+    allow_dirty = os.getenv("HEALTHCHECK_ALLOW_DIRTY", "false").lower() == "true"
+    return {
+        "allowed_branches": allowed_branches,
+        "allow_dirty": allow_dirty,
+    }
+
+
 def run_healthcheck(poll_interval: float, idle_log_interval: float) -> int:
     log(f"SmartBlog LiveAvatar worker healthcheck ({startup_summary(poll_interval, idle_log_interval)})")
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
@@ -1295,11 +1305,13 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float, fail_on
         "render_sizes": render_size_config(),
         "profiles": runtime_profile_config(),
         "save_paths": runtime_save_paths(),
+        "healthcheck_policy": healthcheck_policy(),
         "worker_api_dns": worker_api_dns_info(),
         "worker_api_connectivity": worker_api_connectivity_info(),
         "worker_api_http": worker_api_http_probe(),
         "runner_state": runner_state_info(),
     }
+    policy = payload["healthcheck_policy"]
     runtime_dependencies = payload["runtime_dependencies"]
     storage = payload["storage"]
     api_dns = payload["worker_api_dns"]
@@ -1331,9 +1343,9 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float, fail_on
     payload["overall_ok"] = all(health_checks.values())
     warnings: List[str] = []
     info: List[str] = []
-    if payload["git_dirty"]:
+    if payload["git_dirty"] and not policy["allow_dirty"]:
         warnings.append("git_dirty")
-    if payload["git_branch"] != "main":
+    if payload["git_branch"] not in policy["allowed_branches"]:
         warnings.append(f"non_main_branch:{payload['git_branch']}")
     if payload["nvidia_smi"]["available"] and payload["nvidia_smi"]["cuda_version"] is None:
         info.append("nvidia_smi_cuda_version_unavailable")
