@@ -660,6 +660,13 @@ class ResidentLiveAvatarRunner:
     def release_gpu_for_ffmpeg(self) -> None:
         return
 
+    def shutdown(self) -> None:
+        try:
+            if hasattr(self, "dist") and self.dist.is_initialized():
+                self.dist.destroy_process_group()
+        except Exception as exc:
+            log(f"Resident runner shutdown warning: {exc}")
+
 
 def get_runner() -> ResidentLiveAvatarRunner:
     global RUNNER
@@ -670,6 +677,16 @@ def get_runner() -> ResidentLiveAvatarRunner:
         cold_start = True
     acquire_duration = time.perf_counter() - acquire_started_at
     return RUNNER, cold_start, acquire_duration
+
+
+def cleanup_runner() -> None:
+    global RUNNER
+    if RUNNER is None:
+        return
+    try:
+        RUNNER.shutdown()
+    finally:
+        RUNNER = None
 
 
 def normalize_video(
@@ -1068,6 +1085,7 @@ def main() -> int:
             break
         time.sleep(poll_interval)
 
+    cleanup_runner()
     log("SmartBlog LiveAvatar worker stopped")
     return 0
 
