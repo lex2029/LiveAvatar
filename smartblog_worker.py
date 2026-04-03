@@ -49,6 +49,7 @@ class RuntimeProfile:
     infer_frames: int
     sample_steps: int
     direct_final_encode: bool
+    enable_compile: bool
     chunk_size: int = 512
 
 
@@ -497,6 +498,8 @@ def choose_runtime_profile(audio_duration: float) -> RuntimeProfile:
             infer_frames=int(os.getenv("LIVEAVATAR_SHORT_INFER_FRAMES", "64")),
             sample_steps=int(os.getenv("LIVEAVATAR_SHORT_SAMPLE_STEPS", "4")),
             direct_final_encode=os.getenv("LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE", "true").lower() == "true",
+            enable_compile=os.getenv("LIVEAVATAR_SHORT_ENABLE_COMPILE", os.getenv("ENABLE_COMPILE", "true")).lower()
+            == "true",
             chunk_size=int(os.getenv("LIVEAVATAR_SHORT_CHUNK_SIZE", "512")),
         )
     return RuntimeProfile(
@@ -504,6 +507,8 @@ def choose_runtime_profile(audio_duration: float) -> RuntimeProfile:
         infer_frames=int(os.getenv("LIVEAVATAR_LONG_INFER_FRAMES", "48")),
         sample_steps=int(os.getenv("LIVEAVATAR_LONG_SAMPLE_STEPS", "4")),
         direct_final_encode=os.getenv("LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE", "false").lower() == "true",
+        enable_compile=os.getenv("LIVEAVATAR_LONG_ENABLE_COMPILE", os.getenv("ENABLE_COMPILE", "true")).lower()
+        == "true",
         chunk_size=int(os.getenv("LIVEAVATAR_LONG_CHUNK_SIZE", "512")),
     )
 
@@ -548,7 +553,8 @@ def liveavatar_env(enable_compile: bool) -> Dict[str, str]:
 
 
 class ResidentLiveAvatarRunner:
-    def __init__(self) -> None:
+    def __init__(self, enable_compile: bool) -> None:
+        self.enable_compile = bool(enable_compile)
         self.init_started_at = time.perf_counter()
         self._setup_env()
         self._setup_dist()
@@ -568,7 +574,7 @@ class ResidentLiveAvatarRunner:
         os.environ.setdefault("RANK", "0")
         os.environ.setdefault("WORLD_SIZE", "1")
         os.environ.setdefault("LOCAL_RANK", "0")
-        os.environ.setdefault("ENABLE_COMPILE", "true")
+        os.environ["ENABLE_COMPILE"] = "true" if self.enable_compile else "false"
         os.environ.setdefault("PYTHONUNBUFFERED", "1")
         os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
@@ -742,12 +748,18 @@ class ResidentLiveAvatarRunner:
             log(f"Resident runner shutdown warning: {exc}")
 
 
-def get_runner() -> ResidentLiveAvatarRunner:
+def get_runner(enable_compile: bool) -> ResidentLiveAvatarRunner:
     global RUNNER
     cold_start = False
     acquire_started_at = time.perf_counter()
+    if RUNNER is not None and RUNNER.enable_compile != bool(enable_compile):
+        log(
+            "Resident runner compile mode changed: "
+            f"{RUNNER.enable_compile} -> {bool(enable_compile)}; recycling runner"
+        )
+        cleanup_runner()
     if RUNNER is None:
-        RUNNER = ResidentLiveAvatarRunner()
+        RUNNER = ResidentLiveAvatarRunner(enable_compile=enable_compile)
         cold_start = True
     acquire_duration = time.perf_counter() - acquire_started_at
     return RUNNER, cold_start, acquire_duration
@@ -767,10 +779,11 @@ def cleanup_runner() -> None:
 
 def runner_state_summary() -> str:
     if RUNNER is None:
-        return "runner_loaded=False, runner_jobs=0"
+        return "runner_loaded=False, runner_jobs=0, runner_compile=n/a"
     return (
         "runner_loaded=True, "
         f"runner_jobs={RUNNER.jobs_processed}, "
+        f"runner_compile={RUNNER.enable_compile}, "
         f"runner_init={format_seconds(RUNNER.init_duration)}"
     )
 
@@ -781,11 +794,13 @@ def runner_state_info() -> Dict[str, Any]:
             "runner_loaded": False,
             "runner_jobs": 0,
             "runner_init_s": None,
+            "runner_compile": None,
         }
     return {
         "runner_loaded": True,
         "runner_jobs": int(RUNNER.jobs_processed),
         "runner_init_s": round(float(RUNNER.init_duration), 3),
+        "runner_compile": bool(RUNNER.enable_compile),
     }
 
 
@@ -1187,10 +1202,12 @@ def startup_summary(poll_interval: float, idle_log_interval: float) -> str:
         f"short<= {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
         f"if{os.getenv('LIVEAVATAR_SHORT_INFER_FRAMES', '64')}/"
         f"df={os.getenv('LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE', 'true')}/"
+        f"compile={os.getenv('LIVEAVATAR_SHORT_ENABLE_COMPILE', os.getenv('ENABLE_COMPILE', 'true'))}/"
         f"chunk={os.getenv('LIVEAVATAR_SHORT_CHUNK_SIZE', '512')}, "
         f"long> {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
         f"if{os.getenv('LIVEAVATAR_LONG_INFER_FRAMES', '48')}/"
         f"df={os.getenv('LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE', 'false')}/"
+        f"compile={os.getenv('LIVEAVATAR_LONG_ENABLE_COMPILE', os.getenv('ENABLE_COMPILE', 'true'))}/"
         f"chunk={os.getenv('LIVEAVATAR_LONG_CHUNK_SIZE', '512')}"
     )
 
@@ -1210,12 +1227,16 @@ def runtime_profile_config() -> Dict[str, Any]:
             "infer_frames": int(os.getenv("LIVEAVATAR_SHORT_INFER_FRAMES", "64")),
             "sample_steps": int(os.getenv("LIVEAVATAR_SHORT_SAMPLE_STEPS", "4")),
             "direct_final_encode": os.getenv("LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE", "true").lower() == "true",
+            "enable_compile": os.getenv("LIVEAVATAR_SHORT_ENABLE_COMPILE", os.getenv("ENABLE_COMPILE", "true")).lower()
+            == "true",
             "chunk_size": int(os.getenv("LIVEAVATAR_SHORT_CHUNK_SIZE", "512")),
         },
         "long": {
             "infer_frames": int(os.getenv("LIVEAVATAR_LONG_INFER_FRAMES", "48")),
             "sample_steps": int(os.getenv("LIVEAVATAR_LONG_SAMPLE_STEPS", "4")),
             "direct_final_encode": os.getenv("LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE", "false").lower() == "true",
+            "enable_compile": os.getenv("LIVEAVATAR_LONG_ENABLE_COMPILE", os.getenv("ENABLE_COMPILE", "true")).lower()
+            == "true",
             "chunk_size": int(os.getenv("LIVEAVATAR_LONG_CHUNK_SIZE", "512")),
         },
     }
@@ -1249,6 +1270,7 @@ def runtime_profile_examples() -> Dict[str, Dict[str, Any]]:
             "infer_frames": profile.infer_frames,
             "sample_steps": profile.sample_steps,
             "direct_final_encode": profile.direct_final_encode,
+            "enable_compile": profile.enable_compile,
             "chunk_size": profile.chunk_size,
             "sample_fps": sample_fps,
             "num_clip": compute_num_clip(audio_duration, infer_frames=profile.infer_frames, fps=sample_fps),
@@ -1268,6 +1290,7 @@ def explain_audio_plan(audio_path: Path) -> Dict[str, Any]:
         "infer_frames": profile.infer_frames,
         "sample_steps": profile.sample_steps,
         "direct_final_encode": profile.direct_final_encode,
+        "enable_compile": profile.enable_compile,
         "chunk_size": profile.chunk_size,
         "sample_fps": sample_fps,
         "num_clip": compute_num_clip(audio_duration, infer_frames=profile.infer_frames, fps=sample_fps),
@@ -1597,6 +1620,7 @@ def process_job(job_id: str) -> None:
                 "LIVEAVATAR_INFER_FRAMES": str(runtime_profile.infer_frames),
                 "LIVEAVATAR_SAMPLE_STEPS": str(runtime_profile.sample_steps),
                 "LIVEAVATAR_DIRECT_FINAL_ENCODE": "true" if runtime_profile.direct_final_encode else "false",
+                "ENABLE_COMPILE": "true" if runtime_profile.enable_compile else "false",
                 "LIVEAVATAR_CROSS_ATTN_CHUNK_SIZE": str(runtime_profile.chunk_size),
                 "LIVEAVATAR_ROPE_CHUNK_SIZE": str(runtime_profile.chunk_size),
                 "LIVEAVATAR_ATTN_OUT_CHUNK_SIZE": str(runtime_profile.chunk_size),
@@ -1609,7 +1633,8 @@ def process_job(job_id: str) -> None:
                 f"audio_duration={audio_duration:.2f}s, num_clip={num_clip}, "
                 f"queue_wait={format_seconds(queue_wait_duration) if queue_wait_duration is not None else 'n/a'}, "
                 f"profile={runtime_profile.name}, infer_frames={runtime_profile.infer_frames}, "
-                f"direct_final={runtime_profile.direct_final_encode}, chunk={runtime_profile.chunk_size}"
+                f"direct_final={runtime_profile.direct_final_encode}, compile={runtime_profile.enable_compile}, "
+                f"chunk={runtime_profile.chunk_size}"
             )
             log(
                 f"Job {job_id} output path: "
@@ -1617,7 +1642,7 @@ def process_job(job_id: str) -> None:
                 f"(raw_save={'fast_nvenc' if not runtime_profile.direct_final_encode else 'n/a'})"
             )
 
-            runner, runner_cold_start, runner_acquire_duration = get_runner()
+            runner, runner_cold_start, runner_acquire_duration = get_runner(runtime_profile.enable_compile)
             runner_jobs_before = runner.jobs_processed
             last_reported_progress = -1
             render_started_at = time.perf_counter()
@@ -1707,6 +1732,7 @@ def process_job(job_id: str) -> None:
                 f"Job {job_id} render started "
                 f"(render_size={render_size}, output_size={output_size}, infer_frames={infer_frames}, "
                 f"num_clip={num_clip}, plan_key={plan_key}, runner_cold_start={runner_cold_start}, "
+                f"runner_compile={runner.enable_compile}, "
                 f"runner_acquire={format_seconds(runner_acquire_duration)}, runner_jobs_before={runner_jobs_before})"
             )
             with temporary_env(runtime_env):
