@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+import importlib
 import json
 import math
 import os
@@ -921,6 +922,28 @@ def nvidia_smi_info() -> Dict[str, Any]:
     return info
 
 
+def compile_runtime_info() -> Dict[str, Any]:
+    info: Dict[str, Any] = {
+        "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
+        "torch_compile_available": hasattr(torch, "compile"),
+        "triton_available": False,
+        "inductor_available": False,
+    }
+    try:
+        import triton  # type: ignore
+
+        info["triton_available"] = True
+        info["triton_version"] = getattr(triton, "__version__", None)
+    except Exception:
+        pass
+    try:
+        importlib.import_module("torch._inductor")
+        info["inductor_available"] = True
+    except Exception:
+        pass
+    return info
+
+
 def disk_space_gb(path: Path) -> Optional[float]:
     try:
         usage = shutil.disk_usage(path)
@@ -1166,6 +1189,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "torch_cuda_version": getattr(torch.version, "cuda", None),
         "requests_version": getattr(requests, "__version__", None),
         "pillow_version": PILLOW_VERSION,
+        "compile_runtime": compile_runtime_info(),
         "nvidia_smi": nvidia_smi_info(),
         "worker_host": worker_host(),
         "worker_pid": worker_pid(),
@@ -1187,7 +1211,6 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         },
         "render_sizes": render_size_config(),
         "profiles": runtime_profile_config(),
-        "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
         "worker_api_dns": worker_api_dns_info(),
         "worker_api_connectivity": worker_api_connectivity_info(),
         "worker_api_http": worker_api_http_probe(),
