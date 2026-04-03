@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 import importlib
 import json
 import math
@@ -1055,6 +1056,7 @@ def file_metadata(path: Path) -> Dict[str, Any]:
         "is_dir": path.is_dir() if exists else False,
         "size_gb": None,
         "mtime_epoch_s": None,
+        "sha256_16": None,
     }
     if not exists:
         return metadata
@@ -1072,6 +1074,7 @@ def file_metadata(path: Path) -> Dict[str, Any]:
             metadata["size_gb"] = round(float(total_size) / (1024**3), 3)
         else:
             metadata["size_gb"] = round(float(stat.st_size) / (1024**3), 3)
+            metadata["sha256_16"] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
     except Exception:
         pass
     return metadata
