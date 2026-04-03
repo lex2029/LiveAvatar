@@ -864,6 +864,32 @@ def startup_summary(poll_interval: float, idle_log_interval: float) -> str:
     )
 
 
+def render_size_config() -> Dict[str, str]:
+    return {
+        "portrait_render": os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE", "832*480"),
+        "landscape_render": os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "480*832"),
+    }
+
+
+def runtime_profile_config() -> Dict[str, Any]:
+    short_audio_max_seconds = float(os.getenv("LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS", "3.0"))
+    return {
+        "short": {
+            "max_audio_s": short_audio_max_seconds,
+            "infer_frames": int(os.getenv("LIVEAVATAR_SHORT_INFER_FRAMES", "64")),
+            "sample_steps": int(os.getenv("LIVEAVATAR_SHORT_SAMPLE_STEPS", "4")),
+            "direct_final_encode": os.getenv("LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE", "true").lower() == "true",
+            "chunk_size": int(os.getenv("LIVEAVATAR_SHORT_CHUNK_SIZE", "512")),
+        },
+        "long": {
+            "infer_frames": int(os.getenv("LIVEAVATAR_LONG_INFER_FRAMES", "48")),
+            "sample_steps": int(os.getenv("LIVEAVATAR_LONG_SAMPLE_STEPS", "4")),
+            "direct_final_encode": os.getenv("LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE", "false").lower() == "true",
+            "chunk_size": int(os.getenv("LIVEAVATAR_LONG_CHUNK_SIZE", "512")),
+        },
+    }
+
+
 def run_healthcheck(poll_interval: float, idle_log_interval: float) -> int:
     log(f"SmartBlog LiveAvatar worker healthcheck ({startup_summary(poll_interval, idle_log_interval)})")
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
@@ -898,6 +924,8 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_device_count": worker_cuda_device_count(),
         "worker_api_host": worker_api_host(),
         "runtime_dependencies": runtime_dependency_flags(),
+        "render_sizes": render_size_config(),
+        "profiles": runtime_profile_config(),
         "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
         "poll_interval_s": poll_interval,
         "idle_log_interval_s": idle_log_interval,
