@@ -883,6 +883,23 @@ def ffmpeg_encoder_available(encoder_name: str) -> Optional[bool]:
     return any(pattern in line for line in result.stdout.splitlines())
 
 
+def disk_space_gb(path: Path) -> Optional[float]:
+    try:
+        usage = shutil.disk_usage(path)
+    except Exception:
+        return None
+    return round(float(usage.free) / (1024**3), 2)
+
+
+def runtime_storage_info() -> Dict[str, Optional[float]]:
+    generated_assets_dir = Path(os.getenv("GENERATED_ASSETS_DIR", str(REPO_ROOT)))
+    return {
+        "repo_free_gb": disk_space_gb(REPO_ROOT),
+        "tmp_free_gb": disk_space_gb(Path("/tmp")),
+        "generated_assets_free_gb": disk_space_gb(generated_assets_dir),
+    }
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -987,6 +1004,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_devices": worker_cuda_devices_info(),
         "worker_api_host": worker_api_host(),
         "runtime_dependencies": runtime_dependency_flags(),
+        "storage": runtime_storage_info(),
         "media_tools": {
             "ffmpeg_version": command_version("ffmpeg"),
             "ffprobe_version": command_version("ffprobe"),
