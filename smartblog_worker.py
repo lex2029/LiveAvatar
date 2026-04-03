@@ -622,6 +622,7 @@ class ResidentLiveAvatarRunner:
             offload_kv_cache=offload_kv_cache,
         )
 
+        lora_started_at = time.perf_counter()
         self.pipeline.noise_model = self.pipeline.add_lora_to_model(
             self.pipeline.noise_model,
             lora_rank=self.training_settings["lora_rank"],
@@ -631,8 +632,10 @@ class ResidentLiveAvatarRunner:
             pretrained_lora_path="ckpt/LiveAvatar/liveavatar.safetensors",
             load_lora_weight_only=False,
         )
+        log(f"LoRA load+merge complete ({format_seconds(time.perf_counter() - lora_started_at)})")
 
         if hasattr(torch, "_scaled_mm"):
+            fp8_started_at = time.perf_counter()
             replace_linear_with_scaled_fp8(
                 self.pipeline.noise_model,
                 ignore_keys=[
@@ -643,6 +646,7 @@ class ResidentLiveAvatarRunner:
                     "casual_audio_encoder.encoder.final_linear",
                 ],
             )
+            log(f"FP8 linear replacement complete ({format_seconds(time.perf_counter() - fp8_started_at)})")
         log("Resident LiveAvatar pipeline loaded")
 
     def render(
