@@ -1192,6 +1192,8 @@ def main() -> int:
         f"git_branch={git_branch_name()}, "
         f"git_dirty={git_is_dirty()}, "
         f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
+        f"poll_interval={format_seconds(poll_interval)}, "
+        f"idle_log_interval={format_seconds(idle_log_interval)}, "
         f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*480')}, "
         f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '480*832')}, "
         f"short<= {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
