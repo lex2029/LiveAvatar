@@ -1258,7 +1258,7 @@ def run_healthcheck(poll_interval: float, idle_log_interval: float) -> int:
         return 1
 
 
-def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
+def run_healthcheck_json(poll_interval: float, idle_log_interval: float, fail_on_warnings: bool = False) -> int:
     payload: Dict[str, Any] = {
         "git_commit": git_commit_short(),
         "git_branch": git_branch_name(),
@@ -1345,10 +1345,13 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         payload["status"] = "yellow"
     else:
         payload["status"] = "green"
+    payload["strict_ok"] = bool(payload["overall_ok"] and not warnings)
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
         payload["poll_skipped"] = True
         payload["poll_error"] = "worker API env is incomplete"
         print(json.dumps(payload, sort_keys=True), flush=True)
+        if fail_on_warnings:
+            return 0 if payload["strict_ok"] else 1
         return 0 if payload["overall_ok"] else 1
     try:
         poll_started_at = time.perf_counter()
@@ -1358,6 +1361,8 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         payload["jobs"] = len(job_ids)
         payload["poll_s"] = round(poll_duration, 3)
         print(json.dumps(payload, sort_keys=True), flush=True)
+        if fail_on_warnings:
+            return 0 if payload["strict_ok"] else 1
         return 0 if payload["overall_ok"] else 1
     except Exception as exc:
         payload["poll_skipped"] = False
@@ -1369,8 +1374,12 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         return 1
 
 
-def run_healthcheck_json_only(poll_interval: float, idle_log_interval: float) -> int:
-    return run_healthcheck_json(poll_interval, idle_log_interval)
+def run_healthcheck_json_only(
+    poll_interval: float,
+    idle_log_interval: float,
+    fail_on_warnings: bool = False,
+) -> int:
+    return run_healthcheck_json(poll_interval, idle_log_interval, fail_on_warnings=fail_on_warnings)
 
 
 def normalize_video(
@@ -1791,6 +1800,9 @@ def main() -> int:
     healthcheck = "--healthcheck" in sys.argv
     healthcheck_json = "--healthcheck-json" in sys.argv
     healthcheck_json_only = "--healthcheck-json-only" in sys.argv
+    healthcheck_strict = "--healthcheck-strict" in sys.argv
+    healthcheck_json_strict = "--healthcheck-json-strict" in sys.argv
+    healthcheck_json_only_strict = "--healthcheck-json-only-strict" in sys.argv
     last_idle_log_at = 0.0
     consecutive_poll_errors = 0
     last_poll_error_at: Optional[float] = None
@@ -1800,15 +1812,25 @@ def main() -> int:
     if not PYTHON_BIN.exists():
         raise RuntimeError(f"python not found: {PYTHON_BIN}")
 
-    if not healthcheck_json_only:
+    if not (healthcheck_json_only or healthcheck_json_only_strict):
         log(f"SmartBlog LiveAvatar worker started ({startup_summary(poll_interval, idle_log_interval)})")
 
-    if healthcheck_json_only:
-        return run_healthcheck_json_only(poll_interval, idle_log_interval)
-    if healthcheck_json:
-        return run_healthcheck_json(poll_interval, idle_log_interval)
+    if healthcheck_json_only or healthcheck_json_only_strict:
+        return run_healthcheck_json_only(
+            poll_interval,
+            idle_log_interval,
+            fail_on_warnings=healthcheck_json_only_strict,
+        )
+    if healthcheck_json or healthcheck_json_strict:
+        return run_healthcheck_json(
+            poll_interval,
+            idle_log_interval,
+            fail_on_warnings=healthcheck_json_strict,
+        )
     if healthcheck:
         return run_healthcheck(poll_interval, idle_log_interval)
+    if healthcheck_strict:
+        return run_healthcheck_json(poll_interval, idle_log_interval, fail_on_warnings=True)
 
     while not STOP_REQUESTED:
         try:
