@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -158,6 +159,14 @@ def worker_headers() -> Dict[str, str]:
 
 def worker_api_url() -> str:
     return f"{getenv_required('SUPABASE_URL').rstrip('/')}/functions/v1/worker-api"
+
+
+def worker_api_host() -> str:
+    url = os.getenv("SUPABASE_URL", "").strip()
+    if not url:
+        return "unknown"
+    parsed = urlparse(url)
+    return parsed.netloc or "unknown"
 
 
 def public_video_url(path: str) -> str:
@@ -1171,6 +1180,7 @@ def process_job(job_id: str) -> None:
                 f"git_commit={git_commit_short()}, "
                 f"git_branch={git_branch_name()}, "
                 f"git_dirty={git_is_dirty()}, "
+                f"worker_api_host={worker_api_host()}, "
                 f"profile={runtime_profile.name}, infer_frames={infer_frames}, "
                 f"sample_steps={runtime_profile.sample_steps}, "
                 f"direct_final={runtime_profile.direct_final_encode}, "
@@ -1246,6 +1256,7 @@ def main() -> int:
         f"cuda_visible_devices={worker_cuda_visible_devices()}, "
         f"cuda_available={worker_cuda_available()}, "
         f"cuda_device_count={worker_cuda_device_count()}, "
+        f"worker_api_host={worker_api_host()}, "
         f"{runtime_dependency_summary()}, "
         f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
         f"poll_interval={format_seconds(poll_interval)}, "
