@@ -1062,7 +1062,20 @@ def runtime_tunables(poll_interval: float, idle_log_interval: float) -> Dict[str
         "idle_log_interval_s": idle_log_interval,
         "worker_api_timeout_s": 60.0,
         "download_timeout_s": 300.0,
+        "preload_runner_on_startup": preload_runner_enabled(),
+        "preload_runner_enable_compile": preload_runner_compile_mode(),
     }
+
+
+def preload_runner_enabled() -> bool:
+    return os.getenv("WORKER_PRELOAD_RUNNER_ON_STARTUP", "false").lower() == "true"
+
+
+def preload_runner_compile_mode() -> bool:
+    return os.getenv(
+        "WORKER_PRELOAD_RUNNER_ENABLE_COMPILE",
+        os.getenv("ENABLE_COMPILE", "true"),
+    ).lower() == "true"
 
 
 def file_metadata(path: Path) -> Dict[str, Any]:
@@ -1197,6 +1210,7 @@ def startup_summary(poll_interval: float, idle_log_interval: float) -> str:
         f"worker_api_host={worker_api_host()}, "
         f"{runtime_dependency_summary()}, "
         f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
+        f"preload_runner={preload_runner_enabled()}, "
         f"poll_interval={format_seconds(poll_interval)}, "
         f"idle_log_interval={format_seconds(idle_log_interval)}, "
         f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*480')}, "
@@ -1918,6 +1932,25 @@ def main() -> int:
         audio_path = Path(sys.argv[flag_index + 1]).expanduser().resolve()
         print(json.dumps(explain_audio_plan(audio_path), sort_keys=True), flush=True)
         return 0
+
+    if preload_runner_enabled():
+        preload_started_at = time.perf_counter()
+        try:
+            runner, runner_cold_start, runner_acquire_duration = get_runner(preload_runner_compile_mode())
+            log(
+                "Startup runner preload complete "
+                f"(cold_start={runner_cold_start}, "
+                f"compile={runner.enable_compile}, "
+                f"acquire={format_seconds(runner_acquire_duration)}, "
+                f"total={format_seconds(time.perf_counter() - preload_started_at)}, "
+                f"{runner_state_summary()})"
+            )
+        except Exception as exc:
+            log(
+                "Startup runner preload failed "
+                f"(compile={preload_runner_compile_mode()}, "
+                f"elapsed={format_seconds(time.perf_counter() - preload_started_at)}): {exc}"
+            )
 
     while not STOP_REQUESTED:
         try:
