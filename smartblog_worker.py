@@ -883,6 +883,44 @@ def ffmpeg_encoder_available(encoder_name: str) -> Optional[bool]:
     return any(pattern in line for line in result.stdout.splitlines())
 
 
+def nvidia_smi_info() -> Dict[str, Any]:
+    nvidia_smi = shutil.which("nvidia-smi")
+    info: Dict[str, Any] = {
+        "available": nvidia_smi is not None,
+        "driver_version": None,
+        "cuda_version": None,
+    }
+    if not nvidia_smi:
+        return info
+    try:
+        result = subprocess.run(
+            [
+                nvidia_smi,
+                "--query-gpu=driver_version",
+                "--format=csv,noheader",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        first_line = result.stdout.splitlines()[0].strip() if result.stdout else ""
+        if first_line:
+            info["driver_version"] = first_line.split(",")[0].strip()
+        banner = subprocess.run(
+            [nvidia_smi],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        banner_line = banner.stdout.splitlines()[0].strip() if banner.stdout else ""
+        marker = "CUDA Version:"
+        if marker in banner_line:
+            info["cuda_version"] = banner_line.split(marker, 1)[1].strip().split()[0]
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
 def disk_space_gb(path: Path) -> Optional[float]:
     try:
         usage = shutil.disk_usage(path)
@@ -1128,6 +1166,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "torch_cuda_version": getattr(torch.version, "cuda", None),
         "requests_version": getattr(requests, "__version__", None),
         "pillow_version": PILLOW_VERSION,
+        "nvidia_smi": nvidia_smi_info(),
         "worker_host": worker_host(),
         "worker_pid": worker_pid(),
         "cuda_visible_devices": worker_cuda_visible_devices(),
