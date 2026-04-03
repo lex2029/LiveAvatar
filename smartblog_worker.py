@@ -780,6 +780,20 @@ def worker_cuda_visible_devices() -> str:
     return os.getenv("CUDA_VISIBLE_DEVICES", "unset")
 
 
+def worker_cuda_available() -> bool:
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def worker_cuda_device_count() -> int:
+    try:
+        return int(torch.cuda.device_count())
+    except Exception:
+        return 0
+
+
 def normalize_video(
     input_path: Path,
     output_path: Path,
@@ -1129,6 +1143,8 @@ def process_job(job_id: str) -> None:
                 f"worker_host={worker_host()}, "
                 f"worker_pid={worker_pid()}, "
                 f"cuda_visible_devices={worker_cuda_visible_devices()}, "
+                f"cuda_available={worker_cuda_available()}, "
+                f"cuda_device_count={worker_cuda_device_count()}, "
                 f"worker_uptime={format_seconds(worker_uptime_seconds())}, "
                 f"queue_wait={format_seconds(queue_wait_duration) if queue_wait_duration is not None else 'n/a'}, "
                 f"claim={format_seconds(claim_duration)}, "
@@ -1209,6 +1225,8 @@ def main() -> int:
         f"worker_host={worker_host()}, "
         f"worker_pid={worker_pid()}, "
         f"cuda_visible_devices={worker_cuda_visible_devices()}, "
+        f"cuda_available={worker_cuda_available()}, "
+        f"cuda_device_count={worker_cuda_device_count()}, "
         f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
         f"poll_interval={format_seconds(poll_interval)}, "
         f"idle_log_interval={format_seconds(idle_log_interval)}, "
@@ -1253,6 +1271,8 @@ def main() -> int:
                         f"worker_host={worker_host()}, "
                         f"worker_pid={worker_pid()}, "
                         f"cuda_visible_devices={worker_cuda_visible_devices()}, "
+                        f"cuda_available={worker_cuda_available()}, "
+                        f"cuda_device_count={worker_cuda_device_count()}, "
                         f"worker_uptime={format_seconds(worker_uptime_seconds())}, "
                         f"{runner_state_summary()})"
                     )
@@ -1281,6 +1301,8 @@ def main() -> int:
         f"(worker_host={worker_host()}, "
         f"worker_pid={worker_pid()}, "
         f"cuda_visible_devices={worker_cuda_visible_devices()}, "
+        f"cuda_available={worker_cuda_available()}, "
+        f"cuda_device_count={worker_cuda_device_count()}, "
         f"worker_uptime={format_seconds(worker_uptime_seconds())}, {stop_runner_state})"
     )
     return 0
