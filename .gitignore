@@ -219,6 +219,13 @@ third_party
 
 websites
 worker_runs/
+benchmarks/maxspeed/*
+!benchmarks/maxspeed/run_benchmark.py
+!benchmarks/maxspeed/OPTIMIZATION_LOG.md
+!benchmarks/maxspeed/boy_10s.wav
+!benchmarks/maxspeed/boy_30s.wav
+!benchmarks/maxspeed/vae_only_lighttae.json
+!benchmarks/maxspeed/vae_only_lighttae_parallel_compare.json
 
 180p_ode
 360p_ode* 

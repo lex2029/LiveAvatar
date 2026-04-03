@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import requests
 from PIL import Image
 import torch
@@ -221,7 +222,7 @@ def plan_key_for_job(job: Dict[str, Any], payload: Dict[str, Any]) -> str:
 
 def compute_num_clip(audio_duration: float, infer_frames: int, fps: int) -> int:
     clip_seconds = infer_frames / float(fps)
-    safety_margin = 2
+    safety_margin = int(os.getenv("LIVEAVATAR_NUM_CLIP_SAFETY_MARGIN", "2"))
     raw = math.ceil(audio_duration / clip_seconds) + safety_margin
     minimum = int(os.getenv("LIVEAVATAR_MIN_NUM_CLIP", "1"))
     maximum = int(os.getenv("LIVEAVATAR_MAX_NUM_CLIP", "120"))
@@ -249,6 +250,151 @@ def liveavatar_env(enable_compile: bool) -> Dict[str, str]:
     env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
     env["PYTHONUNBUFFERED"] = "1"
     return env
+
+
+def save_video_fast_nvenc(
+    tensor: torch.Tensor,
+    save_file: Path,
+    fps: int,
+    normalize: bool = True,
+    value_range=(-1, 1),
+) -> None:
+    if tensor.ndim != 5 or tensor.shape[0] != 1:
+        raise ValueError(f"fast raw save expects tensor shape [1,C,T,H,W], got {tuple(tensor.shape)}")
+    frames = tensor.detach()
+    if normalize:
+        lo, hi = value_range
+        frames = frames.clamp(lo, hi)
+        frames = (frames - lo) / float(hi - lo)
+    frames = (frames[0].permute(1, 2, 3, 0) * 255.0).round().to(torch.uint8).cpu().contiguous()
+    frame_array = frames.numpy()
+    if frame_array.ndim != 4 or frame_array.shape[-1] != 3:
+        raise ValueError(f"fast raw save expects RGB frame array, got {frame_array.shape}")
+    height, width = frame_array.shape[1], frame_array.shape[2]
+    command = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "pipe:0",
+        "-an",
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p4",
+        "-movflags",
+        "+faststart",
+        str(save_file),
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    try:
+        process.stdin.write(frame_array.tobytes())
+        process.stdin.close()
+    except Exception:
+        process.kill()
+        raise
+    stdout = process.stdout.read() if process.stdout is not None else b""
+    stderr = process.stderr.read() if process.stderr is not None else b""
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"fast nvenc raw save failed (exit {process.returncode}): "
+            f"{stderr.decode(errors='replace').strip()}"
+        )
+
+
+def save_video_final_nvenc(
+    tensor: torch.Tensor,
+    save_file: Path,
+    audio_path: Path,
+    fps: int,
+    output_size: Optional[str] = None,
+    normalize: bool = True,
+    value_range=(-1, 1),
+) -> None:
+    if tensor.ndim != 5 or tensor.shape[0] != 1:
+        raise ValueError(f"direct final save expects tensor shape [1,C,T,H,W], got {tuple(tensor.shape)}")
+    frames = tensor.detach()
+    if normalize:
+        lo, hi = value_range
+        frames = frames.clamp(lo, hi)
+        frames = (frames - lo) / float(hi - lo)
+    frames = (frames[0].permute(1, 2, 3, 0) * 255.0).round().to(torch.uint8).cpu().contiguous()
+    frame_array = frames.numpy()
+    height, width = frame_array.shape[1], frame_array.shape[2]
+    vf = ["hwupload_cuda"]
+    if output_size:
+        out_h, out_w = map(int, output_size.split("*"))
+        vf.append(f"scale_cuda={out_w}:{out_h}")
+    command = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "pipe:0",
+        "-i",
+        str(audio_path),
+        "-vf",
+        ",".join(vf),
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p4",
+        "-r",
+        str(fps),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(save_file),
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    try:
+        process.stdin.write(frame_array.tobytes())
+        process.stdin.close()
+    except Exception:
+        process.kill()
+        raise
+    stderr = process.stderr.read() if process.stderr is not None else b""
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"direct final nvenc save failed (exit {process.returncode}): "
+            f"{stderr.decode(errors='replace').strip()}"
+        )
 
 
 class ResidentLiveAvatarRunner:
@@ -280,6 +426,10 @@ class ResidentLiveAvatarRunner:
         import torch.distributed as dist
 
         self.dist = dist
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
         if not self.dist.is_initialized():
             torch.cuda.set_device(0)
             self.dist.init_process_group(
@@ -348,11 +498,13 @@ class ResidentLiveAvatarRunner:
         audio_path: Path,
         output_path: Path,
         size: str,
+        output_size: Optional[str],
         prompt: str,
         num_clip: int,
         base_seed: int,
         progress_callback=None,
-    ) -> None:
+        return_video_tensor: bool = False,
+    ) -> Optional[torch.Tensor]:
         from liveavatar.models.wan.wan_2_2.utils.utils import merge_video_audio, save_video
 
         infer_frames = int(os.getenv("LIVEAVATAR_INFER_FRAMES", "48"))
@@ -392,19 +544,54 @@ class ResidentLiveAvatarRunner:
             progress_callback=progress_callback,
         )
 
-        save_video(
-            tensor=video[None],
-            save_file=str(output_path),
-            fps=self.cfg.sample_fps,
-            nrow=1,
-            normalize=True,
-            value_range=(-1, 1),
-        )
-        merge_video_audio(video_path=str(output_path), audio_path=str(audio_path))
+        if return_video_tensor:
+            return video
+
+        direct_final_encode = os.getenv("LIVEAVATAR_DIRECT_FINAL_ENCODE", "false").lower() == "true"
+        use_fast_raw_save = os.getenv("LIVEAVATAR_FAST_RAW_SAVE", "true").lower() == "true"
+        if direct_final_encode:
+            if progress_callback is not None:
+                progress_callback(81, 0.0, 1.0)
+            log("Saving final video via direct NVENC path")
+            save_video_final_nvenc(
+                tensor=video[None],
+                save_file=output_path,
+                audio_path=audio_path,
+                fps=self.cfg.sample_fps,
+                output_size=output_size,
+                normalize=True,
+                value_range=(-1, 1),
+            )
+            if progress_callback is not None:
+                progress_callback(100, 1.0, 1.0)
+        elif use_fast_raw_save:
+            log("Saving raw video via fast NVENC path")
+            save_video_fast_nvenc(
+                tensor=video[None],
+                save_file=output_path,
+                fps=self.cfg.sample_fps,
+                normalize=True,
+                value_range=(-1, 1),
+            )
+        else:
+            save_video(
+                tensor=video[None],
+                save_file=str(output_path),
+                fps=self.cfg.sample_fps,
+                nrow=1,
+                normalize=True,
+                value_range=(-1, 1),
+            )
+        defer_audio_merge = os.getenv("LIVEAVATAR_DEFER_AUDIO_MERGE", "true").lower() == "true"
+        if defer_audio_merge:
+            log("Deferring audio merge to final normalize ffmpeg pass")
+        else:
+            merge_video_audio(video_path=str(output_path), audio_path=str(audio_path))
         del video
         torch.cuda.empty_cache()
         if not output_path.exists():
             raise FileNotFoundError(f"Resident renderer finished without output file: {output_path}")
+        return None
 
     def release_gpu_for_ffmpeg(self) -> None:
         return
@@ -426,6 +613,7 @@ def normalize_video(
     output_path: Path,
     fps: int = 25,
     output_size: Optional[str] = None,
+    audio_path: Optional[Path] = None,
     progress_callback=None,
 ) -> None:
     gpu_filters = ["hwupload_cuda"]
@@ -438,6 +626,10 @@ def normalize_video(
         "-nostats",
         "-i",
         str(input_path),
+    ]
+    if audio_path is not None:
+        gpu_command.extend(["-i", str(audio_path)])
+    gpu_command.extend([
         "-vf",
         ",".join(gpu_filters),
         "-c:v",
@@ -446,16 +638,26 @@ def normalize_video(
         "p4",
         "-r",
         str(fps),
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
+    ])
+    if audio_path is not None:
+        gpu_command.extend([
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-shortest",
+        ])
+    gpu_command.extend([
         "-movflags",
         "+faststart",
         "-progress",
         "pipe:1",
         str(output_path),
-    ]
+    ])
     try:
         total_duration = probe_video_duration(input_path)
         process = subprocess.Popen(
@@ -550,6 +752,8 @@ def process_job(job_id: str) -> None:
             audio_duration = probe_audio_duration(audio_path)
             num_clip = compute_num_clip(audio_duration, infer_frames=infer_frames, fps=sample_fps)
             base_seed = int(payload.get("seed") or os.getenv("LIVEAVATAR_BASE_SEED", "420"))
+            direct_final_encode = os.getenv("LIVEAVATAR_DIRECT_FINAL_ENCODE", "false").lower() == "true"
+            render_output_path = final_video_path if direct_final_encode else raw_video_path
 
             log(
                 f"Processing job {job_id}: orientation={orientation}, plan_key={plan_key}, "
@@ -652,8 +856,9 @@ def process_job(job_id: str) -> None:
             runner.render(
                 image_path=image_path,
                 audio_path=audio_path,
-                output_path=raw_video_path,
+                output_path=render_output_path,
                 size=render_size,
+                output_size=output_size,
                 prompt=prompt,
                 num_clip=num_clip,
                 base_seed=base_seed,
@@ -687,22 +892,27 @@ def process_job(job_id: str) -> None:
                 )
             if postprocess_duration is not None:
                 log(f"Job {job_id} postprocess finished in {format_seconds(postprocess_duration)}")
-            runner.release_gpu_for_ffmpeg()
-            upscale_started_at = time.perf_counter()
-            log(f"Job {job_id} upscale started")
-            normalize_video(
-                raw_video_path,
-                final_video_path,
-                fps=25,
-                output_size=output_size,
-                progress_callback=on_upscale_progress,
-            )
-            upscale_finished_at = time.perf_counter()
-            raw_duration = probe_video_duration(raw_video_path)
-            log(
-                f"Job {job_id} upscale finished in {format_seconds(upscale_finished_at - upscale_started_at)} "
-                f"for {raw_duration:.1f}s of video"
-            )
+            if direct_final_encode:
+                upscale_started_at = render_finished_at
+                upscale_finished_at = render_finished_at
+                log(f"Job {job_id} upscale skipped: direct-final encode already produced final output")
+            else:
+                runner.release_gpu_for_ffmpeg()
+                upscale_started_at = time.perf_counter()
+                log(f"Job {job_id} upscale started")
+                normalize_video(
+                    raw_video_path,
+                    final_video_path,
+                    fps=25,
+                    output_size=output_size,
+                    progress_callback=on_upscale_progress,
+                )
+                upscale_finished_at = time.perf_counter()
+                raw_duration = probe_video_duration(raw_video_path)
+                log(
+                    f"Job {job_id} upscale finished in {format_seconds(upscale_finished_at - upscale_started_at)} "
+                    f"for {raw_duration:.1f}s of video"
+                )
             upload_started_at = time.perf_counter()
             log(f"Job {job_id} upload started")
             upload_video(upload["signed_url"], final_video_path)
