@@ -822,6 +822,53 @@ def runtime_dependency_summary() -> str:
     )
 
 
+def startup_summary(poll_interval: float, idle_log_interval: float) -> str:
+    return (
+        f"git_commit={git_commit_short()}, "
+        f"git_branch={git_branch_name()}, "
+        f"git_dirty={git_is_dirty()}, "
+        f"worker_host={worker_host()}, "
+        f"worker_pid={worker_pid()}, "
+        f"cuda_visible_devices={worker_cuda_visible_devices()}, "
+        f"cuda_available={worker_cuda_available()}, "
+        f"cuda_device_count={worker_cuda_device_count()}, "
+        f"worker_api_host={worker_api_host()}, "
+        f"{runtime_dependency_summary()}, "
+        f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
+        f"poll_interval={format_seconds(poll_interval)}, "
+        f"idle_log_interval={format_seconds(idle_log_interval)}, "
+        f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*480')}, "
+        f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '480*832')}, "
+        f"short<= {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
+        f"if{os.getenv('LIVEAVATAR_SHORT_INFER_FRAMES', '64')}/"
+        f"df={os.getenv('LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE', 'true')}/"
+        f"chunk={os.getenv('LIVEAVATAR_SHORT_CHUNK_SIZE', '512')}, "
+        f"long> {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
+        f"if{os.getenv('LIVEAVATAR_LONG_INFER_FRAMES', '48')}/"
+        f"df={os.getenv('LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE', 'false')}/"
+        f"chunk={os.getenv('LIVEAVATAR_LONG_CHUNK_SIZE', '512')}"
+    )
+
+
+def run_healthcheck(poll_interval: float, idle_log_interval: float) -> int:
+    log(f"SmartBlog LiveAvatar worker healthcheck ({startup_summary(poll_interval, idle_log_interval)})")
+    if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
+        log("Healthcheck skipped poll: worker API env is incomplete")
+        return 0
+    try:
+        poll_started_at = time.perf_counter()
+        job_ids = initial_poll()
+        poll_duration = time.perf_counter() - poll_started_at
+        log(
+            "Healthcheck poll "
+            f"(jobs={len(job_ids)}, poll={format_seconds(poll_duration)}, worker_api_host={worker_api_host()})"
+        )
+        return 0
+    except Exception as exc:
+        log(f"Healthcheck poll failed: {exc}")
+        return 1
+
+
 def normalize_video(
     input_path: Path,
     output_path: Path,
@@ -1237,6 +1284,7 @@ def main() -> int:
     poll_interval = float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "10"))
     idle_log_interval = float(os.getenv("WORKER_IDLE_LOG_INTERVAL_SECONDS", "300"))
     once = "--once" in sys.argv
+    healthcheck = "--healthcheck" in sys.argv
     last_idle_log_at = 0.0
     consecutive_poll_errors = 0
     last_poll_error_at: Optional[float] = None
@@ -1246,32 +1294,10 @@ def main() -> int:
     if not PYTHON_BIN.exists():
         raise RuntimeError(f"python not found: {PYTHON_BIN}")
 
-    log(
-        "SmartBlog LiveAvatar worker started "
-        f"(git_commit={git_commit_short()}, "
-        f"git_branch={git_branch_name()}, "
-        f"git_dirty={git_is_dirty()}, "
-        f"worker_host={worker_host()}, "
-        f"worker_pid={worker_pid()}, "
-        f"cuda_visible_devices={worker_cuda_visible_devices()}, "
-        f"cuda_available={worker_cuda_available()}, "
-        f"cuda_device_count={worker_cuda_device_count()}, "
-        f"worker_api_host={worker_api_host()}, "
-        f"{runtime_dependency_summary()}, "
-        f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
-        f"poll_interval={format_seconds(poll_interval)}, "
-        f"idle_log_interval={format_seconds(idle_log_interval)}, "
-        f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*480')}, "
-        f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '480*832')}, "
-        f"short<= {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
-        f"if{os.getenv('LIVEAVATAR_SHORT_INFER_FRAMES', '64')}/"
-        f"df={os.getenv('LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE', 'true')}/"
-        f"chunk={os.getenv('LIVEAVATAR_SHORT_CHUNK_SIZE', '512')}, "
-        f"long> {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
-        f"if{os.getenv('LIVEAVATAR_LONG_INFER_FRAMES', '48')}/"
-        f"df={os.getenv('LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE', 'false')}/"
-        f"chunk={os.getenv('LIVEAVATAR_LONG_CHUNK_SIZE', '512')})"
-    )
+    log(f"SmartBlog LiveAvatar worker started ({startup_summary(poll_interval, idle_log_interval)})")
+
+    if healthcheck:
+        return run_healthcheck(poll_interval, idle_log_interval)
 
     while not STOP_REQUESTED:
         try:
