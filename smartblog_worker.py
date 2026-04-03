@@ -799,9 +799,13 @@ def runtime_dependency_summary() -> str:
     liveavatar_lora = (REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors").exists()
     ffmpeg_ready = shutil.which("ffmpeg") is not None
     ffprobe_ready = shutil.which("ffprobe") is not None
+    supabase_url_ready = bool(os.getenv("SUPABASE_URL"))
+    worker_api_key_ready = bool(os.getenv("WORKER_API_KEY"))
     return (
         f"ffmpeg_ready={ffmpeg_ready}, "
         f"ffprobe_ready={ffprobe_ready}, "
+        f"supabase_url_ready={supabase_url_ready}, "
+        f"worker_api_key_ready={worker_api_key_ready}, "
         f"torchrun_ready={TORCHRUN.exists()}, "
         f"python_ready={PYTHON_BIN.exists()}, "
         f"wan_ckpt_ready={wan_ckpt}, "
