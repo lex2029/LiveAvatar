@@ -866,6 +866,23 @@ def command_version(command: str) -> Optional[str]:
     return first_line or None
 
 
+def ffmpeg_encoder_available(encoder_name: str) -> Optional[bool]:
+    ffmpeg_binary = shutil.which("ffmpeg")
+    if not ffmpeg_binary:
+        return None
+    try:
+        result = subprocess.run(
+            [ffmpeg_binary, "-hide_banner", "-encoders"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    pattern = f" {encoder_name}"
+    return any(pattern in line for line in result.stdout.splitlines())
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -973,6 +990,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "media_tools": {
             "ffmpeg_version": command_version("ffmpeg"),
             "ffprobe_version": command_version("ffprobe"),
+            "h264_nvenc_available": ffmpeg_encoder_available("h264_nvenc"),
         },
         "render_sizes": render_size_config(),
         "profiles": runtime_profile_config(),
