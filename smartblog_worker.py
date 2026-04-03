@@ -774,6 +774,20 @@ def runner_state_summary() -> str:
     )
 
 
+def runner_state_info() -> Dict[str, Any]:
+    if RUNNER is None:
+        return {
+            "runner_loaded": False,
+            "runner_jobs": 0,
+            "runner_init_s": None,
+        }
+    return {
+        "runner_loaded": True,
+        "runner_jobs": int(RUNNER.jobs_processed),
+        "runner_init_s": round(float(RUNNER.init_duration), 3),
+    }
+
+
 def worker_uptime_seconds() -> float:
     return max(0.0, time.monotonic() - PROCESS_STARTED_AT)
 
@@ -1246,6 +1260,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "worker_api_dns": worker_api_dns_info(),
         "worker_api_connectivity": worker_api_connectivity_info(),
         "worker_api_http": worker_api_http_probe(),
+        "runner_state": runner_state_info(),
     }
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
         payload["poll_skipped"] = True
