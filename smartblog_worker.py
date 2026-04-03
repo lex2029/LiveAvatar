@@ -1079,6 +1079,8 @@ def file_metadata(path: Path) -> Dict[str, Any]:
 
 def runtime_artifacts() -> Dict[str, Dict[str, Any]]:
     return {
+        "env_file": file_metadata(ENV_PATH),
+        "worker_config": file_metadata(CONFIG_PATH),
         "wan_ckpt_dir": file_metadata(REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B"),
         "lora_file": file_metadata(REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors"),
     }
