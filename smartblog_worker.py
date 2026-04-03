@@ -819,9 +819,14 @@ def upload_video(signed_url: str, video_path: Path) -> None:
 
 def process_job(job_id: str) -> None:
     log(f"Claiming job {job_id}")
+    claim_started_at = time.perf_counter()
     claim = call_worker_api({"action": "claim", "job_id": job_id})
+    claim_duration = time.perf_counter() - claim_started_at
     if not claim.get("claimed"):
-        log(f"Job {job_id} was not claimed: {claim.get('reason', 'unknown reason')}")
+        log(
+            f"Job {job_id} was not claimed after {format_seconds(claim_duration)}: "
+            f"{claim.get('reason', 'unknown reason')}"
+        )
         return
 
     job = claim.get("job", {})
@@ -855,11 +860,14 @@ def process_job(job_id: str) -> None:
         audio_path = temp_root / "audio.mp3"
         raw_video_path = temp_root / "rendered_raw.mp4"
         final_video_path = temp_root / "rendered.mp4"
+        assets_download_duration: Optional[float] = None
 
         try:
             log(f"Downloading assets for {job_id}")
+            assets_download_started_at = time.perf_counter()
             download_file(assets["avatar_url"], image_path)
             download_file(assets["audio_url"], audio_path)
+            assets_download_duration = time.perf_counter() - assets_download_started_at
 
             orientation = payload.get("orientation")
             if orientation not in {"portrait", "landscape"}:
@@ -1061,6 +1069,8 @@ def process_job(job_id: str) -> None:
             log(
                 f"Job {job_id} summary: orientation={orientation}, render_size={render_size}, "
                 f"output_size={output_size}, plan_key={plan_key}, audio={audio_duration:.1f}s, "
+                f"claim={format_seconds(claim_duration)}, "
+                f"assets_download={format_seconds(assets_download_duration) if assets_download_duration is not None else 'n/a'}, "
                 f"git_commit={git_commit_short()}, "
                 f"git_branch={git_branch_name()}, "
                 f"git_dirty={git_is_dirty()}, "
