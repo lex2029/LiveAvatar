@@ -906,6 +906,10 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         return 1
 
 
+def run_healthcheck_json_only(poll_interval: float, idle_log_interval: float) -> int:
+    return run_healthcheck_json(poll_interval, idle_log_interval)
+
+
 def normalize_video(
     input_path: Path,
     output_path: Path,
@@ -1323,6 +1327,7 @@ def main() -> int:
     once = "--once" in sys.argv
     healthcheck = "--healthcheck" in sys.argv
     healthcheck_json = "--healthcheck-json" in sys.argv
+    healthcheck_json_only = "--healthcheck-json-only" in sys.argv
     last_idle_log_at = 0.0
     consecutive_poll_errors = 0
     last_poll_error_at: Optional[float] = None
@@ -1332,8 +1337,11 @@ def main() -> int:
     if not PYTHON_BIN.exists():
         raise RuntimeError(f"python not found: {PYTHON_BIN}")
 
-    log(f"SmartBlog LiveAvatar worker started ({startup_summary(poll_interval, idle_log_interval)})")
+    if not healthcheck_json_only:
+        log(f"SmartBlog LiveAvatar worker started ({startup_summary(poll_interval, idle_log_interval)})")
 
+    if healthcheck_json_only:
+        return run_healthcheck_json_only(poll_interval, idle_log_interval)
     if healthcheck_json:
         return run_healthcheck_json(poll_interval, idle_log_interval)
     if healthcheck:
