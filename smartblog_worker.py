@@ -803,6 +803,13 @@ def worker_cuda_device_count() -> int:
         return 0
 
 
+def worker_cuda_device_names() -> List[str]:
+    try:
+        return [str(torch.cuda.get_device_name(index)) for index in range(torch.cuda.device_count())]
+    except Exception:
+        return []
+
+
 def runtime_dependency_flags() -> Dict[str, bool]:
     wan_ckpt = (REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B").exists()
     liveavatar_lora = (REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors").exists()
@@ -939,6 +946,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_visible_devices": worker_cuda_visible_devices(),
         "cuda_available": worker_cuda_available(),
         "cuda_device_count": worker_cuda_device_count(),
+        "cuda_device_names": worker_cuda_device_names(),
         "worker_api_host": worker_api_host(),
         "runtime_dependencies": runtime_dependency_flags(),
         "media_tools": {
