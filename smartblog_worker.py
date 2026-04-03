@@ -1005,6 +1005,32 @@ def worker_api_connectivity_info() -> Dict[str, Any]:
     return info
 
 
+def worker_api_http_probe() -> Dict[str, Any]:
+    info: Dict[str, Any] = {
+        "url": worker_api_url() if os.getenv("SUPABASE_URL") else None,
+        "ok": False,
+        "status_code": None,
+        "request_s": None,
+    }
+    if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
+        info["error"] = "worker API env is incomplete"
+        return info
+    started_at = time.perf_counter()
+    try:
+        response = requests.post(
+            worker_api_url(),
+            json={"action": "poll", "job_type": "render_video"},
+            headers=worker_headers(),
+            timeout=60,
+        )
+        info["status_code"] = response.status_code
+        info["request_s"] = round(time.perf_counter() - started_at, 3)
+        info["ok"] = response.ok
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -1123,6 +1149,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
         "worker_api_dns": worker_api_dns_info(),
         "worker_api_connectivity": worker_api_connectivity_info(),
+        "worker_api_http": worker_api_http_probe(),
     }
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
         payload["poll_skipped"] = True
