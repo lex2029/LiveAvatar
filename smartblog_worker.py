@@ -910,6 +910,17 @@ def runtime_storage_info() -> Dict[str, Optional[float]]:
     }
 
 
+def runtime_paths() -> Dict[str, str]:
+    return {
+        "repo_root": str(REPO_ROOT),
+        "tmp_dir": "/tmp",
+        "generated_assets_dir": os.getenv("GENERATED_ASSETS_DIR", str(REPO_ROOT)),
+        "venv_bin": str(VENV_BIN),
+        "torchrun": str(TORCHRUN),
+        "python_bin": str(PYTHON_BIN),
+    }
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -1014,6 +1025,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_devices": worker_cuda_devices_info(),
         "worker_api_host": worker_api_host(),
         "runtime_dependencies": runtime_dependency_flags(),
+        "paths": runtime_paths(),
         "storage": runtime_storage_info(),
         "media_tools": {
             "ffmpeg_version": command_version("ffmpeg"),
