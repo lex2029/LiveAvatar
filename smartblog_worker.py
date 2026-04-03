@@ -1090,7 +1090,9 @@ def main() -> int:
         signal.signal(signum, handle_signal)
 
     poll_interval = float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "10"))
+    idle_log_interval = float(os.getenv("WORKER_IDLE_LOG_INTERVAL_SECONDS", "300"))
     once = "--once" in sys.argv
+    last_idle_log_at = 0.0
 
     if not TORCHRUN.exists():
         raise RuntimeError(f"torchrun not found: {TORCHRUN}")
@@ -1118,6 +1120,11 @@ def main() -> int:
             job_ids = initial_poll()
             if job_ids:
                 log(f"Polled {len(job_ids)} queued job(s)")
+            else:
+                now = time.monotonic()
+                if now - last_idle_log_at >= idle_log_interval:
+                    log("Worker idle heartbeat: queue empty")
+                    last_idle_log_at = now
             for job_id in job_ids:
                 if STOP_REQUESTED:
                     break
