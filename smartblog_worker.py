@@ -822,6 +822,23 @@ def runtime_dependency_flags() -> Dict[str, bool]:
     }
 
 
+def command_version(command: str) -> Optional[str]:
+    binary = shutil.which(command)
+    if not binary:
+        return None
+    try:
+        result = subprocess.run(
+            [binary, "-version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    first_line = result.stdout.splitlines()[0].strip() if result.stdout else ""
+    return first_line or None
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -924,6 +941,10 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_device_count": worker_cuda_device_count(),
         "worker_api_host": worker_api_host(),
         "runtime_dependencies": runtime_dependency_flags(),
+        "media_tools": {
+            "ffmpeg_version": command_version("ffmpeg"),
+            "ffprobe_version": command_version("ffprobe"),
+        },
         "render_sizes": render_size_config(),
         "profiles": runtime_profile_config(),
         "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
