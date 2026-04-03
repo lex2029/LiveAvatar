@@ -797,7 +797,11 @@ def worker_cuda_device_count() -> int:
 def runtime_dependency_summary() -> str:
     wan_ckpt = (REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B").exists()
     liveavatar_lora = (REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors").exists()
+    ffmpeg_ready = shutil.which("ffmpeg") is not None
+    ffprobe_ready = shutil.which("ffprobe") is not None
     return (
+        f"ffmpeg_ready={ffmpeg_ready}, "
+        f"ffprobe_ready={ffprobe_ready}, "
         f"torchrun_ready={TORCHRUN.exists()}, "
         f"python_ready={PYTHON_BIN.exists()}, "
         f"wan_ckpt_ready={wan_ckpt}, "
