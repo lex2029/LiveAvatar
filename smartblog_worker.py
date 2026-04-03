@@ -1318,7 +1318,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         payload["poll_skipped"] = True
         payload["poll_error"] = "worker API env is incomplete"
         print(json.dumps(payload, sort_keys=True), flush=True)
-        return 0
+        return 0 if payload["overall_ok"] else 1
     try:
         poll_started_at = time.perf_counter()
         job_ids = initial_poll()
@@ -1327,10 +1327,12 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         payload["jobs"] = len(job_ids)
         payload["poll_s"] = round(poll_duration, 3)
         print(json.dumps(payload, sort_keys=True), flush=True)
-        return 0
+        return 0 if payload["overall_ok"] else 1
     except Exception as exc:
         payload["poll_skipped"] = False
         payload["poll_error"] = str(exc)
+        payload["health_checks"]["api_http_ready"] = False
+        payload["overall_ok"] = False
         print(json.dumps(payload, sort_keys=True), flush=True)
         return 1
 
