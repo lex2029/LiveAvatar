@@ -107,6 +107,68 @@ def git_is_dirty() -> bool:
         return False
 
 
+HF_REPO_ID = "abalex2029/smartblog"
+
+CHECKPOINT_MANIFESTS = [
+    {
+        "subfolder": "Wan2.2-S2V-14B",
+        "marker": "diffusion_pytorch_model.safetensors.index.json",
+        "description": "Wan2.2-S2V-14B base model (~46 GB)",
+    },
+    {
+        "subfolder": "LiveAvatar",
+        "marker": "liveavatar.safetensors",
+        "description": "LiveAvatar LoRA weights (~1.3 GB)",
+    },
+    {
+        "subfolder": "Autoencoders",
+        "marker": "lighttaew2_1.pth",
+        "description": "LightTAE / LightVAE autoencoders (~74 MB)",
+    },
+    {
+        "subfolder": "Wan2.2-S2V-14B-merged-liveavatar-prefp8-test",
+        "marker": "diffusion_pytorch_model-00001-of-00004.safetensors",
+        "description": "Pre-merged LoRA+FP8 noise model (~31 GB)",
+    },
+]
+
+
+def ensure_checkpoints() -> None:
+    """Download missing model checkpoints from HuggingFace on first run."""
+    ckpt_root = REPO_ROOT / "ckpt"
+    ckpt_root.mkdir(exist_ok=True)
+
+    missing = []
+    for m in CHECKPOINT_MANIFESTS:
+        marker_path = ckpt_root / m["subfolder"] / m["marker"]
+        if not marker_path.exists():
+            missing.append(m)
+
+    if not missing:
+        log("All checkpoints present")
+        return
+
+    hf_token = os.getenv("HF_KEY", "").strip() or os.getenv("HF_TOKEN", "").strip()
+    if not hf_token:
+        raise RuntimeError(
+            "Missing checkpoints and no HF_KEY/HF_TOKEN in environment. "
+            "Set HF_KEY in .env or download checkpoints manually into ckpt/."
+        )
+
+    from huggingface_hub import snapshot_download
+
+    for m in missing:
+        log(f"Downloading {m['description']} -> ckpt/{m['subfolder']}")
+        snapshot_download(
+            repo_id=HF_REPO_ID,
+            repo_type="model",
+            local_dir=str(ckpt_root),
+            allow_patterns=[f"{m['subfolder']}/*"],
+            token=hf_token,
+        )
+        log(f"Downloaded {m['description']}")
+
+
 def parse_timestamp_seconds(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -2075,6 +2137,7 @@ def handle_signal(signum: int, _frame: Any) -> None:
 def main() -> int:
     load_config_file(CONFIG_PATH)
     load_env_file(ENV_PATH)
+    ensure_checkpoints()
     apply_runtime_torch_settings()
     (REPO_ROOT / "worker_runs").mkdir(exist_ok=True)
 
