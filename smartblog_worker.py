@@ -1239,6 +1239,21 @@ def runtime_save_paths() -> Dict[str, str]:
     }
 
 
+def runtime_profile_examples() -> Dict[str, Dict[str, Any]]:
+    examples: Dict[str, Dict[str, Any]] = {}
+    for audio_duration in (2.0, 3.1, 10.0, 30.0):
+        profile = choose_runtime_profile(audio_duration)
+        examples[f"{audio_duration:.1f}s"] = {
+            "selected_profile": profile.name,
+            "infer_frames": profile.infer_frames,
+            "sample_steps": profile.sample_steps,
+            "direct_final_encode": profile.direct_final_encode,
+            "chunk_size": profile.chunk_size,
+            "save_path": "direct_final_nvenc" if profile.direct_final_encode else "standard_postprocess",
+        }
+    return examples
+
+
 def healthcheck_policy() -> Dict[str, Any]:
     allowed_branches_raw = os.getenv("HEALTHCHECK_ALLOWED_BRANCHES", "main")
     allowed_branches = [branch.strip() for branch in allowed_branches_raw.split(",") if branch.strip()]
@@ -1305,6 +1320,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float, fail_on
         "render_sizes": render_size_config(),
         "profiles": runtime_profile_config(),
         "save_paths": runtime_save_paths(),
+        "profile_examples": runtime_profile_examples(),
         "healthcheck_policy": healthcheck_policy(),
         "worker_api_dns": worker_api_dns_info(),
         "worker_api_connectivity": worker_api_connectivity_info(),
