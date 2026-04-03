@@ -751,6 +751,12 @@ def cleanup_runner() -> None:
         RUNNER = None
 
 
+def runner_state_summary() -> str:
+    if RUNNER is None:
+        return "runner_loaded=False, runner_jobs=0"
+    return f"runner_loaded=True, runner_jobs={RUNNER.jobs_processed}"
+
+
 def normalize_video(
     input_path: Path,
     output_path: Path,
@@ -1209,7 +1215,10 @@ def main() -> int:
             else:
                 now = time.monotonic()
                 if now - last_idle_log_at >= idle_log_interval:
-                    log(f"Worker idle heartbeat: queue empty (poll={format_seconds(poll_duration)})")
+                    log(
+                        "Worker idle heartbeat: "
+                        f"queue empty (poll={format_seconds(poll_duration)}, {runner_state_summary()})"
+                    )
                     last_idle_log_at = now
             for job_id in job_ids:
                 if STOP_REQUESTED:
