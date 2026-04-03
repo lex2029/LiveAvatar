@@ -116,6 +116,13 @@ class WanS2V:
         if t5_fsdp or dit_fsdp or use_sp:
             self.init_on_cpu = False
 
+        stage_started_at = time.perf_counter()
+
+        def log_init_stage(stage: str) -> None:
+            elapsed = time.perf_counter() - stage_started_at
+            print(f"[wan_init] {stage} (+{elapsed:.2f}s)", flush=True)
+
+        log_init_stage("start")
         shard_fn = partial(shard_model, device_id=device_id)
         self.text_encoder = T5EncoderModel(
             text_len=config.text_len,
@@ -125,10 +132,12 @@ class WanS2V:
             tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
             shard_fn=shard_fn if t5_fsdp else None,
         )
+        log_init_stage("text_encoder_ready")
 
         self.vae = Wan2_1_VAE(
             vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
             device=self.device,dtype=self.param_dtype)
+        log_init_stage("vae_ready")
 
         if self.is_training:
             from liveavatar.models.wan.flow_match import FlowMatchScheduler_Omni
@@ -151,6 +160,7 @@ class WanS2V:
                     use_dynamic_shifting=False)
             else:
                 raise NotImplementedError("Unsupported solver.")
+        log_init_stage("scheduler_ready")
 
         logging.info(f"Creating WanModel from {checkpoint_dir}")
         if not dit_fsdp:
@@ -163,6 +173,7 @@ class WanS2V:
                 checkpoint_dir, torch_dtype=self.param_dtype)
         
         self.noise_model.freqs.to(device=self.device)
+        log_init_stage("noise_model_ready")
 
         self.noise_model = self._configure_model(
             model=self.noise_model,
@@ -172,6 +183,7 @@ class WanS2V:
             shard_fn=shard_fn,
             convert_model_dtype=convert_model_dtype)
         self.noise_model.num_frame_per_block = self.num_frames_per_block
+        log_init_stage("noise_model_configured")
 
         if not self.is_training:
             self.audio_encoder = AudioEncoder(
@@ -182,6 +194,7 @@ class WanS2V:
                 model_id=os.path.join(checkpoint_dir
                 ,
                                     "wav2vec2-large-xlsr-53-english"))
+        log_init_stage("audio_encoder_ready")
 
         if use_sp:
             self.sp_size = sp_size if sp_size is not None else get_world_size()
@@ -193,6 +206,7 @@ class WanS2V:
         self.drop_first_motion = config.drop_first_motion
         self.fps = config.sample_fps
         self.audio_sample_m = 0
+        log_init_stage("ready")
 
     def _resolve_kv_cache_dtype(self):
         dtype_name = os.getenv("LIVEAVATAR_KV_CACHE_DTYPE", "").strip().lower()
