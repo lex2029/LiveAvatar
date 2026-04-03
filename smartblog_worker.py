@@ -1037,7 +1037,15 @@ def main() -> int:
         "SmartBlog LiveAvatar worker started "
         f"(ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
         f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*480')}, "
-        f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '480*832')})"
+        f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '480*832')}, "
+        f"short<= {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
+        f"if{os.getenv('LIVEAVATAR_SHORT_INFER_FRAMES', '64')}/"
+        f"df={os.getenv('LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE', 'true')}/"
+        f"chunk={os.getenv('LIVEAVATAR_SHORT_CHUNK_SIZE', '512')}, "
+        f"long> {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
+        f"if{os.getenv('LIVEAVATAR_LONG_INFER_FRAMES', '48')}/"
+        f"df={os.getenv('LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE', 'false')}/"
+        f"chunk={os.getenv('LIVEAVATAR_LONG_CHUNK_SIZE', '512')})"
     )
 
     while not STOP_REQUESTED:
