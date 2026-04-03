@@ -1227,6 +1227,15 @@ def attention_runtime_env() -> Dict[str, str]:
     }
 
 
+def runtime_save_paths() -> Dict[str, str]:
+    short_direct_final = os.getenv("LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE", "true").lower() == "true"
+    long_direct_final = os.getenv("LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE", "false").lower() == "true"
+    return {
+        "short": "direct_final_nvenc" if short_direct_final else "standard_postprocess",
+        "long": "direct_final_nvenc" if long_direct_final else "standard_postprocess",
+    }
+
+
 def run_healthcheck(poll_interval: float, idle_log_interval: float) -> int:
     log(f"SmartBlog LiveAvatar worker healthcheck ({startup_summary(poll_interval, idle_log_interval)})")
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
@@ -1282,6 +1291,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         },
         "render_sizes": render_size_config(),
         "profiles": runtime_profile_config(),
+        "save_paths": runtime_save_paths(),
         "worker_api_dns": worker_api_dns_info(),
         "worker_api_connectivity": worker_api_connectivity_info(),
         "worker_api_http": worker_api_http_probe(),
