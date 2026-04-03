@@ -62,6 +62,12 @@ def log(message: str) -> None:
     print(f"[{ts}] {message}", flush=True)
 
 
+def apply_runtime_torch_settings() -> None:
+    precision = os.getenv("LIVEAVATAR_FLOAT32_MATMUL_PRECISION", "").strip().lower()
+    if precision in {"highest", "high", "medium"}:
+        torch.set_float32_matmul_precision(precision)
+
+
 def git_commit_short() -> str:
     try:
         result = subprocess.run(
@@ -1903,6 +1909,7 @@ def handle_signal(signum: int, _frame: Any) -> None:
 def main() -> int:
     load_config_file(CONFIG_PATH)
     load_env_file(ENV_PATH)
+    apply_runtime_torch_settings()
     (REPO_ROOT / "worker_runs").mkdir(exist_ok=True)
 
     for signum in (signal.SIGINT, signal.SIGTERM):

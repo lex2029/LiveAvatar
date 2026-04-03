@@ -259,6 +259,7 @@ def main():
 
     mod.load_config_file(REPO_ROOT / "worker_config.json")
     mod.load_env_file(REPO_ROOT / ".env")
+    mod.apply_runtime_torch_settings()
 
     image_path = Path(args.image).resolve()
     audio_path = Path(args.audio).resolve()
