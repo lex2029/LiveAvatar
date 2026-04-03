@@ -803,22 +803,36 @@ def worker_cuda_device_count() -> int:
         return 0
 
 
-def runtime_dependency_summary() -> str:
+def runtime_dependency_flags() -> Dict[str, bool]:
     wan_ckpt = (REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B").exists()
     liveavatar_lora = (REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors").exists()
     ffmpeg_ready = shutil.which("ffmpeg") is not None
     ffprobe_ready = shutil.which("ffprobe") is not None
     supabase_url_ready = bool(os.getenv("SUPABASE_URL"))
     worker_api_key_ready = bool(os.getenv("WORKER_API_KEY"))
+    return {
+        "ffmpeg_ready": ffmpeg_ready,
+        "ffprobe_ready": ffprobe_ready,
+        "supabase_url_ready": supabase_url_ready,
+        "worker_api_key_ready": worker_api_key_ready,
+        "torchrun_ready": TORCHRUN.exists(),
+        "python_ready": PYTHON_BIN.exists(),
+        "wan_ckpt_ready": wan_ckpt,
+        "lora_ready": liveavatar_lora,
+    }
+
+
+def runtime_dependency_summary() -> str:
+    flags = runtime_dependency_flags()
     return (
-        f"ffmpeg_ready={ffmpeg_ready}, "
-        f"ffprobe_ready={ffprobe_ready}, "
-        f"supabase_url_ready={supabase_url_ready}, "
-        f"worker_api_key_ready={worker_api_key_ready}, "
-        f"torchrun_ready={TORCHRUN.exists()}, "
-        f"python_ready={PYTHON_BIN.exists()}, "
-        f"wan_ckpt_ready={wan_ckpt}, "
-        f"lora_ready={liveavatar_lora}"
+        f"ffmpeg_ready={flags['ffmpeg_ready']}, "
+        f"ffprobe_ready={flags['ffprobe_ready']}, "
+        f"supabase_url_ready={flags['supabase_url_ready']}, "
+        f"worker_api_key_ready={flags['worker_api_key_ready']}, "
+        f"torchrun_ready={flags['torchrun_ready']}, "
+        f"python_ready={flags['python_ready']}, "
+        f"wan_ckpt_ready={flags['wan_ckpt_ready']}, "
+        f"lora_ready={flags['lora_ready']}"
     )
 
 
@@ -880,7 +894,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_available": worker_cuda_available(),
         "cuda_device_count": worker_cuda_device_count(),
         "worker_api_host": worker_api_host(),
-        "runtime_dependencies": runtime_dependency_summary(),
+        "runtime_dependencies": runtime_dependency_flags(),
         "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
         "poll_interval_s": poll_interval,
         "idle_log_interval_s": idle_log_interval,
