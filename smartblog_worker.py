@@ -754,7 +754,11 @@ def cleanup_runner() -> None:
 def runner_state_summary() -> str:
     if RUNNER is None:
         return "runner_loaded=False, runner_jobs=0"
-    return f"runner_loaded=True, runner_jobs={RUNNER.jobs_processed}"
+    return (
+        "runner_loaded=True, "
+        f"runner_jobs={RUNNER.jobs_processed}, "
+        f"runner_init={format_seconds(RUNNER.init_duration)}"
+    )
 
 
 def normalize_video(
