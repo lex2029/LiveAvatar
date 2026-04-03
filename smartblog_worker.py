@@ -967,6 +967,24 @@ def runtime_artifacts() -> Dict[str, Dict[str, Any]]:
     }
 
 
+def worker_api_dns_info() -> Dict[str, Any]:
+    host = worker_api_host()
+    info: Dict[str, Any] = {
+        "host": host,
+        "resolved": False,
+        "ip_addresses": [],
+    }
+    if host == "unknown":
+        return info
+    try:
+        addresses = sorted({entry[4][0] for entry in socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)})
+        info["resolved"] = True
+        info["ip_addresses"] = addresses
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -1083,6 +1101,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "render_sizes": render_size_config(),
         "profiles": runtime_profile_config(),
         "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
+        "worker_api_dns": worker_api_dns_info(),
     }
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
         payload["poll_skipped"] = True
