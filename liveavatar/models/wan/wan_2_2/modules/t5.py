@@ -54,6 +54,10 @@ def should_mmap_checkpoint():
     return os.getenv("LIVEAVATAR_T5_CHECKPOINT_MMAP", "true").lower() == "true"
 
 
+def should_meta_init_checkpoint():
+    return os.getenv("LIVEAVATAR_T5_META_INIT", "true").lower() == "true"
+
+
 class GELU(nn.Module):
 
     def forward(self, x):
@@ -501,16 +505,21 @@ class T5EncoderModel:
         self.tokenizer_path = tokenizer_path
 
         # init model
+        init_device = 'meta' if should_meta_init_checkpoint() else device
         model = umt5_xxl(
             encoder_only=True,
             return_tokenizer=False,
             dtype=dtype,
-            device=device).eval().requires_grad_(False)
+            device=init_device).eval().requires_grad_(False)
         logging.info(f'loading {checkpoint_path}')
         load_kwargs = dict(map_location='cpu')
         if should_mmap_checkpoint():
             load_kwargs['mmap'] = True
-        model.load_state_dict(torch.load(checkpoint_path, **load_kwargs))
+        state_dict = torch.load(checkpoint_path, **load_kwargs)
+        if should_meta_init_checkpoint():
+            model.load_state_dict(state_dict, assign=True)
+        else:
+            model.load_state_dict(state_dict)
         self.model = model
         if shard_fn is not None:
             self.model = shard_fn(self.model, sync_module_states=False)
