@@ -831,6 +831,26 @@ def worker_cuda_devices_info() -> List[Dict[str, Any]]:
         return []
 
 
+def worker_cuda_memory_info() -> Dict[str, Any]:
+    info: Dict[str, Any] = {
+        "free_gb": None,
+        "total_gb": None,
+        "allocated_gb": None,
+        "reserved_gb": None,
+    }
+    try:
+        if not torch.cuda.is_available():
+            return info
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        info["free_gb"] = round(float(free_bytes) / (1024**3), 2)
+        info["total_gb"] = round(float(total_bytes) / (1024**3), 2)
+        info["allocated_gb"] = round(float(torch.cuda.memory_allocated()) / (1024**3), 3)
+        info["reserved_gb"] = round(float(torch.cuda.memory_reserved()) / (1024**3), 3)
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
 def runtime_dependency_flags() -> Dict[str, bool]:
     wan_ckpt = (REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B").exists()
     liveavatar_lora = (REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors").exists()
@@ -1207,6 +1227,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_device_count": worker_cuda_device_count(),
         "cuda_device_names": worker_cuda_device_names(),
         "cuda_devices": worker_cuda_devices_info(),
+        "cuda_memory": worker_cuda_memory_info(),
         "worker_api_host": worker_api_host(),
         "runtime_dependencies": runtime_dependency_flags(),
         "paths": runtime_paths(),
