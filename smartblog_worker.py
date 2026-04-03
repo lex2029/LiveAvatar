@@ -930,6 +930,43 @@ def runtime_tunables(poll_interval: float, idle_log_interval: float) -> Dict[str
     }
 
 
+def file_metadata(path: Path) -> Dict[str, Any]:
+    exists = path.exists()
+    metadata: Dict[str, Any] = {
+        "path": str(path),
+        "exists": exists,
+        "is_dir": path.is_dir() if exists else False,
+        "size_gb": None,
+        "mtime_epoch_s": None,
+    }
+    if not exists:
+        return metadata
+    try:
+        stat = path.stat()
+        metadata["mtime_epoch_s"] = round(float(stat.st_mtime), 3)
+        if path.is_dir():
+            total_size = 0
+            for child in path.rglob("*"):
+                if child.is_file():
+                    try:
+                        total_size += child.stat().st_size
+                    except Exception:
+                        continue
+            metadata["size_gb"] = round(float(total_size) / (1024**3), 3)
+        else:
+            metadata["size_gb"] = round(float(stat.st_size) / (1024**3), 3)
+    except Exception:
+        pass
+    return metadata
+
+
+def runtime_artifacts() -> Dict[str, Dict[str, Any]]:
+    return {
+        "wan_ckpt_dir": file_metadata(REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B"),
+        "lora_file": file_metadata(REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors"),
+    }
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -1037,6 +1074,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "paths": runtime_paths(),
         "storage": runtime_storage_info(),
         "tunables": runtime_tunables(poll_interval, idle_log_interval),
+        "artifacts": runtime_artifacts(),
         "media_tools": {
             "ffmpeg_version": command_version("ffmpeg"),
             "ffprobe_version": command_version("ffprobe"),
