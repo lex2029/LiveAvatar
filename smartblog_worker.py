@@ -37,6 +37,7 @@ DEFAULT_PROMPT = (
 
 STOP_REQUESTED = False
 RUNNER: Optional["ResidentLiveAvatarRunner"] = None
+PROCESS_STARTED_AT = time.monotonic()
 
 
 @dataclass(frozen=True)
@@ -761,6 +762,10 @@ def runner_state_summary() -> str:
     )
 
 
+def worker_uptime_seconds() -> float:
+    return max(0.0, time.monotonic() - PROCESS_STARTED_AT)
+
+
 def normalize_video(
     input_path: Path,
     output_path: Path,
@@ -1107,6 +1112,7 @@ def process_job(job_id: str) -> None:
             log(
                 f"Job {job_id} summary: orientation={orientation}, render_size={render_size}, "
                 f"output_size={output_size}, plan_key={plan_key}, audio={audio_duration:.1f}s, "
+                f"worker_uptime={format_seconds(worker_uptime_seconds())}, "
                 f"queue_wait={format_seconds(queue_wait_duration) if queue_wait_duration is not None else 'n/a'}, "
                 f"claim={format_seconds(claim_duration)}, "
                 f"assets_download={format_seconds(assets_download_duration) if assets_download_duration is not None else 'n/a'}, "
@@ -1221,7 +1227,9 @@ def main() -> int:
                 if now - last_idle_log_at >= idle_log_interval:
                     log(
                         "Worker idle heartbeat: "
-                        f"queue empty (poll={format_seconds(poll_duration)}, {runner_state_summary()})"
+                        f"queue empty (poll={format_seconds(poll_duration)}, "
+                        f"worker_uptime={format_seconds(worker_uptime_seconds())}, "
+                        f"{runner_state_summary()})"
                     )
                     last_idle_log_at = now
             for job_id in job_ids:
