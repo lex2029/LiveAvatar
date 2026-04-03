@@ -606,10 +606,13 @@ class ResidentLiveAvatarRunner:
 
         log("Loading LiveAvatar pipeline into resident worker memory")
         offload_kv_cache = os.getenv("LIVEAVATAR_OFFLOAD_KV_CACHE", "false").lower() == "true"
+        merged_noise_dir = merged_noise_model_dir()
+        use_merged_noise_model = merged_noise_dir is not None and merged_noise_dir.exists()
 
         self.pipeline = WanS2V(
             config=self.cfg,
             checkpoint_dir="ckpt/Wan2.2-S2V-14B/",
+            noise_model_checkpoint_dir=str(merged_noise_dir) if use_merged_noise_model else None,
             device_id=0,
             rank=0,
             t5_fsdp=False,
@@ -622,17 +625,20 @@ class ResidentLiveAvatarRunner:
             offload_kv_cache=offload_kv_cache,
         )
 
-        lora_started_at = time.perf_counter()
-        self.pipeline.noise_model = self.pipeline.add_lora_to_model(
-            self.pipeline.noise_model,
-            lora_rank=self.training_settings["lora_rank"],
-            lora_alpha=self.training_settings["lora_alpha"],
-            lora_target_modules=self.training_settings["lora_target_modules"],
-            init_lora_weights=self.training_settings["init_lora_weights"],
-            pretrained_lora_path="ckpt/LiveAvatar/liveavatar.safetensors",
-            load_lora_weight_only=False,
-        )
-        log(f"LoRA load+merge complete ({format_seconds(time.perf_counter() - lora_started_at)})")
+        if use_merged_noise_model:
+            log(f"Using merged noise model cache from {merged_noise_dir}")
+        else:
+            lora_started_at = time.perf_counter()
+            self.pipeline.noise_model = self.pipeline.add_lora_to_model(
+                self.pipeline.noise_model,
+                lora_rank=self.training_settings["lora_rank"],
+                lora_alpha=self.training_settings["lora_alpha"],
+                lora_target_modules=self.training_settings["lora_target_modules"],
+                init_lora_weights=self.training_settings["init_lora_weights"],
+                pretrained_lora_path="ckpt/LiveAvatar/liveavatar.safetensors",
+                load_lora_weight_only=False,
+            )
+            log(f"LoRA load+merge complete ({format_seconds(time.perf_counter() - lora_started_at)})")
 
         if hasattr(torch, "_scaled_mm"):
             fp8_started_at = time.perf_counter()
@@ -1068,6 +1074,7 @@ def runtime_tunables(poll_interval: float, idle_log_interval: float) -> Dict[str
         "idle_log_interval_s": idle_log_interval,
         "worker_api_timeout_s": 60.0,
         "download_timeout_s": 300.0,
+        "merged_noise_model_dir": str(merged_noise_model_dir()) if merged_noise_model_dir() else None,
         "preload_runner_on_startup": preload_runner_enabled(),
         "preload_runner_enable_compile": preload_runner_compile_mode(),
     }
@@ -1082,6 +1089,13 @@ def preload_runner_compile_mode() -> bool:
         "WORKER_PRELOAD_RUNNER_ENABLE_COMPILE",
         os.getenv("ENABLE_COMPILE", "true"),
     ).lower() == "true"
+
+
+def merged_noise_model_dir() -> Optional[Path]:
+    raw = os.getenv("LIVEAVATAR_MERGED_NOISE_MODEL_DIR", "").strip()
+    if not raw:
+        return None
+    return Path(raw)
 
 
 def file_metadata(path: Path) -> Dict[str, Any]:
@@ -1216,6 +1230,7 @@ def startup_summary(poll_interval: float, idle_log_interval: float) -> str:
         f"worker_api_host={worker_api_host()}, "
         f"{runtime_dependency_summary()}, "
         f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
+        f"merged_noise_model_dir={merged_noise_model_dir() or 'unset'}, "
         f"preload_runner={preload_runner_enabled()}, "
         f"poll_interval={format_seconds(poll_interval)}, "
         f"idle_log_interval={format_seconds(idle_log_interval)}, "
