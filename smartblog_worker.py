@@ -865,6 +865,28 @@ def worker_cuda_memory_info() -> Dict[str, Any]:
     return info
 
 
+def host_memory_info() -> Dict[str, Any]:
+    info: Dict[str, Any] = {
+        "total_gb": None,
+        "available_gb": None,
+    }
+    try:
+        meminfo: Dict[str, int] = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            number = value.strip().split()[0]
+            meminfo[key] = int(number)
+        if "MemTotal" in meminfo:
+            info["total_gb"] = round(float(meminfo["MemTotal"]) / (1024**2), 2)
+        if "MemAvailable" in meminfo:
+            info["available_gb"] = round(float(meminfo["MemAvailable"]) / (1024**2), 2)
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
 def runtime_dependency_flags() -> Dict[str, bool]:
     wan_ckpt = (REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B").exists()
     liveavatar_lora = (REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors").exists()
@@ -1243,6 +1265,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_device_names": worker_cuda_device_names(),
         "cuda_devices": worker_cuda_devices_info(),
         "cuda_memory": worker_cuda_memory_info(),
+        "host_memory": host_memory_info(),
         "worker_api_host": worker_api_host(),
         "runtime_dependencies": runtime_dependency_flags(),
         "paths": runtime_paths(),
