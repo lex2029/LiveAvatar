@@ -1160,6 +1160,15 @@ def runtime_profile_config() -> Dict[str, Any]:
     }
 
 
+def attention_runtime_env() -> Dict[str, str]:
+    return {
+        "cross_attn_chunk_size": os.getenv("LIVEAVATAR_CROSS_ATTN_CHUNK_SIZE", "256"),
+        "rope_chunk_size": os.getenv("LIVEAVATAR_ROPE_CHUNK_SIZE", "256"),
+        "attn_out_chunk_size": os.getenv("LIVEAVATAR_ATTN_OUT_CHUNK_SIZE", "256"),
+        "qkv_chunk_size": os.getenv("LIVEAVATAR_QKV_CHUNK_SIZE", "256"),
+    }
+
+
 def run_healthcheck(poll_interval: float, idle_log_interval: float) -> int:
     log(f"SmartBlog LiveAvatar worker healthcheck ({startup_summary(poll_interval, idle_log_interval)})")
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
@@ -1204,6 +1213,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "storage": runtime_storage_info(),
         "tunables": runtime_tunables(poll_interval, idle_log_interval),
         "artifacts": runtime_artifacts(),
+        "attention_runtime_env": attention_runtime_env(),
         "media_tools": {
             "ffmpeg_version": command_version("ffmpeg"),
             "ffprobe_version": command_version("ffprobe"),
