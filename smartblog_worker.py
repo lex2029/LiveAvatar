@@ -748,10 +748,12 @@ class ResidentLiveAvatarRunner:
             log(f"Resident runner shutdown warning: {exc}")
 
 
-def get_runner(enable_compile: bool) -> ResidentLiveAvatarRunner:
+def get_runner(enable_compile: Optional[bool] = None) -> ResidentLiveAvatarRunner:
     global RUNNER
     cold_start = False
     acquire_started_at = time.perf_counter()
+    if enable_compile is None:
+        enable_compile = os.getenv("ENABLE_COMPILE", "true").lower() == "true"
     if RUNNER is not None and RUNNER.enable_compile != bool(enable_compile):
         log(
             "Resident runner compile mode changed: "

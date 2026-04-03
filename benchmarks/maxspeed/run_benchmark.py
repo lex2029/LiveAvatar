@@ -243,8 +243,43 @@ def main():
     live_events_path = output_dir / "live_events.json"
     heartbeat_path = output_dir / "heartbeat.json"
 
+    def write_json(path: Path, payload):
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+
     audio_duration = mod.probe_audio_duration(audio_path)
     num_clip = mod.compute_num_clip(audio_duration, infer_frames=args.infer_frames, fps=25)
+
+    write_json(
+        output_dir / "status.json",
+        {
+            "stage": "runner_acquire_started",
+            "warm_runs_completed": 0,
+            "image": str(image_path),
+            "audio": str(audio_path),
+            "audio_duration": audio_duration,
+            "size": args.size,
+            "infer_frames": args.infer_frames,
+            "num_clip": num_clip,
+            "compile": args.compile,
+            "chunk_sizes": {
+                "cross_attn": args.cross_attn_chunk_size,
+                "rope": args.rope_chunk_size,
+                "attn_out": args.attn_out_chunk_size,
+                "qkv": args.qkv_chunk_size,
+            },
+            "direct_final_encode": args.direct_final_encode,
+        },
+    )
+    write_json(
+        heartbeat_path,
+        {
+            "updated_at": time.time(),
+            "stage": "runner_acquire_started",
+            "audio_duration": audio_duration,
+            "num_clip": num_clip,
+            "compile": args.compile,
+        },
+    )
 
     runner_acquire_started = time.perf_counter()
     runner, cold_start, acquire_duration = mod.get_runner()
@@ -525,8 +560,10 @@ def main():
             "warm_runs_completed": len(warmup_runs),
             "image": str(image_path),
             "audio": str(audio_path),
+            "audio_duration": audio_duration,
             "size": args.size,
             "infer_frames": args.infer_frames,
+            "num_clip": num_clip,
             "compile": args.compile,
         },
     )
