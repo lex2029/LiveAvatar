@@ -810,6 +810,26 @@ def worker_cuda_device_names() -> List[str]:
         return []
 
 
+def worker_cuda_devices_info() -> List[Dict[str, Any]]:
+    try:
+        devices: List[Dict[str, Any]] = []
+        for index in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(index)
+            capability = f"{props.major}.{props.minor}"
+            total_memory_gb = round(float(props.total_memory) / (1024**3), 2)
+            devices.append(
+                {
+                    "index": index,
+                    "name": str(props.name),
+                    "capability": capability,
+                    "total_memory_gb": total_memory_gb,
+                }
+            )
+        return devices
+    except Exception:
+        return []
+
+
 def runtime_dependency_flags() -> Dict[str, bool]:
     wan_ckpt = (REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B").exists()
     liveavatar_lora = (REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors").exists()
@@ -947,6 +967,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "cuda_available": worker_cuda_available(),
         "cuda_device_count": worker_cuda_device_count(),
         "cuda_device_names": worker_cuda_device_names(),
+        "cuda_devices": worker_cuda_devices_info(),
         "worker_api_host": worker_api_host(),
         "runtime_dependencies": runtime_dependency_flags(),
         "media_tools": {
