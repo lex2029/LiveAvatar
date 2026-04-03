@@ -768,6 +768,10 @@ def worker_uptime_seconds() -> float:
     return max(0.0, time.monotonic() - PROCESS_STARTED_AT)
 
 
+def worker_pid() -> int:
+    return os.getpid()
+
+
 def normalize_video(
     input_path: Path,
     output_path: Path,
@@ -1114,6 +1118,7 @@ def process_job(job_id: str) -> None:
             log(
                 f"Job {job_id} summary: orientation={orientation}, render_size={render_size}, "
                 f"output_size={output_size}, plan_key={plan_key}, audio={audio_duration:.1f}s, "
+                f"worker_pid={worker_pid()}, "
                 f"worker_uptime={format_seconds(worker_uptime_seconds())}, "
                 f"queue_wait={format_seconds(queue_wait_duration) if queue_wait_duration is not None else 'n/a'}, "
                 f"claim={format_seconds(claim_duration)}, "
@@ -1191,6 +1196,7 @@ def main() -> int:
         f"(git_commit={git_commit_short()}, "
         f"git_branch={git_branch_name()}, "
         f"git_dirty={git_is_dirty()}, "
+        f"worker_pid={worker_pid()}, "
         f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
         f"poll_interval={format_seconds(poll_interval)}, "
         f"idle_log_interval={format_seconds(idle_log_interval)}, "
@@ -1232,6 +1238,7 @@ def main() -> int:
                     log(
                         "Worker idle heartbeat: "
                         f"queue empty (poll={format_seconds(poll_duration)}, "
+                        f"worker_pid={worker_pid()}, "
                         f"worker_uptime={format_seconds(worker_uptime_seconds())}, "
                         f"{runner_state_summary()})"
                     )
@@ -1257,7 +1264,8 @@ def main() -> int:
     cleanup_runner()
     log(
         "SmartBlog LiveAvatar worker stopped "
-        f"(worker_uptime={format_seconds(worker_uptime_seconds())}, {stop_runner_state})"
+        f"(worker_pid={worker_pid()}, "
+        f"worker_uptime={format_seconds(worker_uptime_seconds())}, {stop_runner_state})"
     )
     return 0
 
