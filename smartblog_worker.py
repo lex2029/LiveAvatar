@@ -236,6 +236,181 @@ def probe_video_duration(video_path: Path) -> float:
     return float(result.stdout.strip())
 
 
+def save_video_fast_nvenc(
+    tensor: torch.Tensor,
+    save_file: Path,
+    fps: int,
+    normalize: bool = True,
+    value_range=(-1, 1),
+) -> None:
+    if tensor.ndim != 5 or tensor.shape[0] != 1:
+        raise ValueError(f"fast raw save expects tensor shape [1,C,T,H,W], got {tuple(tensor.shape)}")
+    frames = tensor.detach()
+    height, width = int(frames.shape[3]), int(frames.shape[4])
+    command = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "pipe:0",
+        "-an",
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p4",
+        "-movflags",
+        "+faststart",
+        str(save_file),
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    try:
+        _stream_rgb24_tensor_to_ffmpeg(
+            process.stdin,
+            frames,
+            normalize=normalize,
+            value_range=value_range,
+        )
+        process.stdin.close()
+    except Exception:
+        process.kill()
+        raise
+    stderr = process.stderr.read() if process.stderr is not None else b""
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"fast nvenc raw save failed (exit {process.returncode}): "
+            f"{stderr.decode(errors='replace').strip()}"
+        )
+
+
+def save_video_final_nvenc(
+    tensor: torch.Tensor,
+    save_file: Path,
+    audio_path: Path,
+    fps: int,
+    output_size: Optional[str] = None,
+    normalize: bool = True,
+    value_range=(-1, 1),
+) -> None:
+    if tensor.ndim != 5 or tensor.shape[0] != 1:
+        raise ValueError(f"direct final save expects tensor shape [1,C,T,H,W], got {tuple(tensor.shape)}")
+    frames = tensor.detach()
+    audio_duration = probe_audio_duration(audio_path)
+    max_frames = max(1, math.ceil(audio_duration * fps))
+    if frames.shape[2] > max_frames:
+        frames = frames[:, :, :max_frames]
+    height, width = int(frames.shape[3]), int(frames.shape[4])
+    vf = ["hwupload_cuda"]
+    if output_size:
+        out_h, out_w = map(int, output_size.split("*"))
+        vf.append(f"scale_cuda={out_w}:{out_h}")
+    command = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "pipe:0",
+        "-i",
+        str(audio_path),
+        "-vf",
+        ",".join(vf),
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p4",
+        "-r",
+        str(fps),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(save_file),
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    try:
+        _stream_rgb24_tensor_to_ffmpeg(
+            process.stdin,
+            frames,
+            normalize=normalize,
+            value_range=value_range,
+        )
+        process.stdin.close()
+    except Exception:
+        process.kill()
+        raise
+    stderr = process.stderr.read() if process.stderr is not None else b""
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"direct final nvenc save failed (exit {process.returncode}): "
+            f"{stderr.decode(errors='replace').strip()}"
+        )
+
+
+def _stream_rgb24_tensor_to_ffmpeg(
+    stdin,
+    tensor: torch.Tensor,
+    normalize: bool = True,
+    value_range=(-1, 1),
+    batch_frames: int = 8,
+) -> None:
+    if tensor.ndim != 5 or tensor.shape[0] != 1:
+        raise ValueError(f"expected tensor shape [1,C,T,H,W], got {tuple(tensor.shape)}")
+    frame_count = int(tensor.shape[2])
+    lo, hi = value_range
+    scale = 255.0 / float(hi - lo)
+    for start in range(0, frame_count, batch_frames):
+        end = min(frame_count, start + batch_frames)
+        chunk = tensor[:, :, start:end]
+        if normalize:
+            chunk = chunk.clamp(lo, hi)
+            chunk = (chunk - lo) * scale
+        else:
+            chunk = chunk * 255.0
+        chunk = (
+            chunk[0]
+            .permute(1, 2, 3, 0)
+            .round()
+            .to(torch.uint8)
+            .cpu()
+            .contiguous()
+        )
+        stdin.write(chunk.numpy().tobytes())
+
+
 def format_seconds(seconds: float) -> str:
     return f"{seconds:.1f}s"
 
@@ -449,14 +624,8 @@ def _stream_rgb24_tensor_to_ffmpeg(
 
 def orientation_to_render_size(orientation: str) -> str:
     if orientation == "landscape":
-        return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "720*1280")
-    return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE", "832*480")
-
-
-def orientation_to_free_render_size(orientation: str) -> str:
-    if orientation == "landscape":
-        return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE_FREE", "256*384")
-    return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE_FREE", "384*256")
+        return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "448*832")
+    return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE", "832*448")
 
 
 def orientation_to_output_size(orientation: str) -> str:
@@ -712,9 +881,6 @@ class ResidentLiveAvatarRunner:
             enable_online_decode=enable_online_decode,
             progress_callback=progress_callback,
         )
-
-        if return_video_tensor:
-            return video
 
         direct_final_encode = os.getenv("LIVEAVATAR_DIRECT_FINAL_ENCODE", "false").lower() == "true"
         use_fast_raw_save = os.getenv("LIVEAVATAR_FAST_RAW_SAVE", "true").lower() == "true"
@@ -1240,8 +1406,8 @@ def startup_summary(poll_interval: float, idle_log_interval: float) -> str:
         f"preload_runner={preload_runner_enabled()}, "
         f"poll_interval={format_seconds(poll_interval)}, "
         f"idle_log_interval={format_seconds(idle_log_interval)}, "
-        f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*480')}, "
-        f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '480*832')}, "
+        f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*448')}, "
+        f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '448*832')}, "
         f"short<= {os.getenv('LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS', '3.0')}s:"
         f"if{os.getenv('LIVEAVATAR_SHORT_INFER_FRAMES', '64')}/"
         f"df={os.getenv('LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE', 'true')}/"
@@ -1257,8 +1423,8 @@ def startup_summary(poll_interval: float, idle_log_interval: float) -> str:
 
 def render_size_config() -> Dict[str, str]:
     return {
-        "portrait_render": os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE", "832*480"),
-        "landscape_render": os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "480*832"),
+        "portrait_render": os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE", "832*448"),
+        "landscape_render": os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "448*832"),
     }
 
 

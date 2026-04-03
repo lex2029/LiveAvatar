@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 import argparse
-import traceback
 import importlib.util
-import inspect
 import json
 import os
-import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -73,95 +69,7 @@ def parse_args():
     parser.add_argument("--warm-runs", type=int, default=0)
     parser.add_argument("--torch-profiler", action="store_true", default=False)
     parser.add_argument("--direct-final-encode", action="store_true", default=False)
-    parser.add_argument("--runner-acquire-timeout-s", type=float, default=60.0)
     return parser.parse_args()
-
-
-class RunnerAcquireTimeout(TimeoutError):
-    pass
-
-
-def acquire_runner_with_timeout(mod, timeout_s: float):
-    if timeout_s <= 0:
-        return mod.get_runner()
-    if not hasattr(signal, "setitimer"):
-        return mod.get_runner()
-
-    previous_handler = signal.getsignal(signal.SIGALRM)
-
-    def _handle_alarm(signum, frame):
-        raise RunnerAcquireTimeout(f"runner acquire exceeded {timeout_s:.1f}s")
-
-    signal.signal(signal.SIGALRM, _handle_alarm)
-    signal.setitimer(signal.ITIMER_REAL, timeout_s)
-    try:
-        return mod.get_runner()
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
-
-
-def probe_visual_stats(video_path: Path) -> dict:
-    from PIL import Image
-    import numpy as np
-
-    if not video_path.exists():
-        return {
-            "exists": False,
-            "valid": False,
-            "reason": "missing_output",
-        }
-
-    def extract_frame(timestamp: float, out_png: Path) -> dict:
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            f"{timestamp:.3f}",
-            "-i",
-            str(video_path),
-            "-frames:v",
-            "1",
-            str(out_png),
-        ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        img = Image.open(out_png).convert("RGB")
-        arr = np.array(img)
-        return {
-            "mean": float(arr.mean()),
-            "min": int(arr.min()),
-            "max": int(arr.max()),
-            "center": arr[arr.shape[0] // 2, arr.shape[1] // 2].tolist(),
-            "shape": list(arr.shape),
-        }
-
-    duration_cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(video_path),
-    ]
-    duration = float(
-        subprocess.run(duration_cmd, check=True, text=True, capture_output=True).stdout.strip()
-    )
-    first_png = video_path.with_suffix(".first.png")
-    mid_png = video_path.with_suffix(".mid.png")
-    first = extract_frame(0.0, first_png)
-    mid = extract_frame(max(0.0, duration * 0.5), mid_png)
-    first_png.unlink(missing_ok=True)
-    mid_png.unlink(missing_ok=True)
-    valid = max(first["mean"], mid["mean"]) > 2.0 and max(first["max"], mid["max"]) > 8
-    return {
-        "exists": True,
-        "valid": valid,
-        "duration_s": duration,
-        "first_frame": first,
-        "mid_frame": mid,
-    }
 
 
 def main():
@@ -259,7 +167,6 @@ def main():
 
     mod.load_config_file(REPO_ROOT / "worker_config.json")
     mod.load_env_file(REPO_ROOT / ".env")
-    mod.apply_runtime_torch_settings()
 
     image_path = Path(args.image).resolve()
     audio_path = Path(args.audio).resolve()
@@ -267,50 +174,13 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_output = output_dir / "rendered_raw.mp4"
     final_output = output_dir / "rendered.mp4"
-    live_events_path = output_dir / "live_events.json"
-    heartbeat_path = output_dir / "heartbeat.json"
-
-    def write_json(path: Path, payload):
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
 
     audio_duration = mod.probe_audio_duration(audio_path)
     num_clip = mod.compute_num_clip(audio_duration, infer_frames=args.infer_frames, fps=25)
 
-    write_json(
-        output_dir / "status.json",
-        {
-            "stage": "runner_acquire_started",
-            "warm_runs_completed": 0,
-            "image": str(image_path),
-            "audio": str(audio_path),
-            "audio_duration": audio_duration,
-            "size": args.size,
-            "infer_frames": args.infer_frames,
-            "num_clip": num_clip,
-            "compile": args.compile,
-            "runner_acquire_timeout_s": args.runner_acquire_timeout_s,
-            "chunk_sizes": {
-                "cross_attn": args.cross_attn_chunk_size,
-                "rope": args.rope_chunk_size,
-                "attn_out": args.attn_out_chunk_size,
-                "qkv": args.qkv_chunk_size,
-            },
-            "direct_final_encode": args.direct_final_encode,
-        },
-    )
-    write_json(
-        heartbeat_path,
-        {
-            "updated_at": time.time(),
-            "stage": "runner_acquire_started",
-            "audio_duration": audio_duration,
-            "num_clip": num_clip,
-            "compile": args.compile,
-            "runner_acquire_timeout_s": args.runner_acquire_timeout_s,
-        },
-    )
-
     runner_acquire_started = time.perf_counter()
+    runner, cold_start, acquire_duration = mod.get_runner()
+    runner_jobs_before = runner.jobs_processed
     prompt = args.prompt or mod.DEFAULT_PROMPT
     size_h, size_w = map(int, args.size.split("*"))
     output_size = "720*1280" if size_w >= size_h else "1280*720"
@@ -342,17 +212,6 @@ def main():
         postprocess_encode_started_at = None
         postprocess_decode_s = 0.0
         postprocess_encode_s = 0.0
-
-        def flush_live_progress(extra: dict | None = None):
-            payload = {
-                "updated_at": time.time(),
-                "render_elapsed_s": time.perf_counter() - render_started_at,
-                "events_count": len(event_trace),
-                "last_event": event_trace[-1] if event_trace else None,
-                "extra": extra or {},
-            }
-            write_json(heartbeat_path, payload)
-            write_json(live_events_path, event_trace)
 
         def on_render_progress(stage: str, clip_index: int, clip_total: int):
             nonlocal clip_generation_started_at
@@ -394,14 +253,6 @@ def main():
                 postprocess_finished_at = now
             elif stage == "postprocess_complete":
                 postprocess_finished_at = now
-            flush_live_progress(
-                {
-                    "kind": "render_progress",
-                    "stage": stage,
-                    "clip_index": clip_index,
-                    "clip_total": clip_total,
-                }
-            )
 
         last_upscale = {"progress": 0, "processed": 0.0, "total": 0.0}
 
@@ -418,17 +269,8 @@ def main():
                     "total_seconds": total_seconds,
                 }
             )
-            flush_live_progress(
-                {
-                    "kind": "upscale_progress",
-                    "progress": progress,
-                    "processed_seconds": processed_seconds,
-                    "total_seconds": total_seconds,
-                }
-            )
 
         try:
-            flush_live_progress({"kind": "run_started"})
             if args.direct_final_encode:
                 video = runner.render(
                     image_path=image_path,
@@ -473,18 +315,13 @@ def main():
                 runner.jobs_processed += 1
 
                 upscale_started_at = time.perf_counter()
-                normalize_kwargs = {
-                    "fps": 25,
-                    "output_size": output_size,
-                    "progress_callback": on_upscale_progress,
-                }
-                normalize_sig = inspect.signature(mod.normalize_video)
-                if "audio_path" in normalize_sig.parameters:
-                    normalize_kwargs["audio_path"] = audio_path
                 mod.normalize_video(
                     raw_target,
                     final_target,
-                    **normalize_kwargs,
+                    fps=25,
+                    output_size=output_size,
+                    audio_path=audio_path,
+                    progress_callback=on_upscale_progress,
                 )
                 upscale_finished_at = time.perf_counter()
         finally:
@@ -555,158 +392,122 @@ def main():
     def write_json(path: Path, payload):
         path.write_text(json.dumps(payload, indent=2) + "\n")
 
-    try:
-        runner, cold_start, acquire_duration = acquire_runner_with_timeout(mod, args.runner_acquire_timeout_s)
-        runner_jobs_before = runner.jobs_processed
-        warmup_runs = []
-        for warm_idx in range(args.warm_runs):
-            warm_raw = output_dir / f"warmup_{warm_idx + 1}_raw.mp4"
-            warm_final = output_dir / f"warmup_{warm_idx + 1}.mp4"
-            warm_metrics = run_once(warm_raw, warm_final)
-            warmup_runs.append(
-                {
-                    "run": warm_idx + 1,
-                    "render_s": warm_metrics["render_s"],
-                    "clip_generation_s": warm_metrics["clip_generation_s"],
-                    "postprocess_s": warm_metrics["postprocess_s"],
-                    "postprocess_decode_s": warm_metrics["postprocess_decode_s"],
-                    "postprocess_encode_s": warm_metrics["postprocess_encode_s"],
-                    "upscale_s": warm_metrics["upscale_s"],
-                    "generation_total_s": warm_metrics["generation_total_s"],
-                    "generation_sec_per_audio_sec": warm_metrics["generation_sec_per_audio_sec"],
-                    "clip_durations": warm_metrics["clip_durations"],
-                    "postprocess_clip_durations": warm_metrics["postprocess_clip_durations"],
-                }
-            )
-            write_json(
-                output_dir / f"warmup_{warm_idx + 1}_metrics.json",
-                warmup_runs[-1],
-            )
-        write_json(
-            output_dir / "status.json",
+    warmup_runs = []
+    for warm_idx in range(args.warm_runs):
+        warm_raw = output_dir / f"warmup_{warm_idx + 1}_raw.mp4"
+        warm_final = output_dir / f"warmup_{warm_idx + 1}.mp4"
+        warm_metrics = run_once(warm_raw, warm_final)
+        warmup_runs.append(
             {
-                "stage": "primary_run_started",
-                "warm_runs_completed": len(warmup_runs),
-                "image": str(image_path),
-                "audio": str(audio_path),
-                "audio_duration": audio_duration,
-                "size": args.size,
-                "infer_frames": args.infer_frames,
-                "num_clip": num_clip,
-                "compile": args.compile,
-            },
+                "run": warm_idx + 1,
+                "render_s": warm_metrics["render_s"],
+                "clip_generation_s": warm_metrics["clip_generation_s"],
+                "postprocess_s": warm_metrics["postprocess_s"],
+                "postprocess_decode_s": warm_metrics["postprocess_decode_s"],
+                "postprocess_encode_s": warm_metrics["postprocess_encode_s"],
+                "upscale_s": warm_metrics["upscale_s"],
+                "generation_total_s": warm_metrics["generation_total_s"],
+                "generation_sec_per_audio_sec": warm_metrics["generation_sec_per_audio_sec"],
+                "clip_durations": warm_metrics["clip_durations"],
+                "postprocess_clip_durations": warm_metrics["postprocess_clip_durations"],
+            }
         )
-        primary_metrics = run_once(raw_output, final_output, enable_profiler=args.torch_profiler)
-        finished_at = time.perf_counter()
+        write_json(
+            output_dir / f"warmup_{warm_idx + 1}_metrics.json",
+            warmup_runs[-1],
+        )
 
-        result = {
-            "benchmark_policy": {
-                "primary_metric": "generation_total_s",
-                "primary_rate_metric": "generation_sec_per_audio_sec",
-                "compare_warm_runs_not_cold_start": True,
-                "notes": "Cold-start timings are diagnostic only. Compare generation timings from an already-loaded resident pipeline.",
-            },
-            "image": str(image_path),
-            "audio": str(audio_path),
-            "audio_duration": audio_duration,
-            "size": args.size,
-            "infer_frames": args.infer_frames,
-            "sample_steps": args.sample_steps,
-            "sample_solver": args.sample_solver,
-            "guide_scale": args.guide_scale,
-            "num_clip": num_clip,
-            "enable_online_decode": args.enable_online_decode,
-            "offload_model": args.offload_model,
-            "offload_kv_cache": args.offload_kv_cache,
-            "disable_cudnn_attn": args.disable_cudnn_attn,
-            "disable_flash_attn": args.disable_flash_attn,
-            "chunk_sizes": {
-                "cross_attn": args.cross_attn_chunk_size,
-                "rope": args.rope_chunk_size,
-                "attn_out": args.attn_out_chunk_size,
-                "qkv": args.qkv_chunk_size,
-            },
-            "compile": args.compile,
-            "compile_mode": args.compile_mode,
-            "compile_backend": args.compile_backend,
-            "compile_dynamic": args.compile_dynamic,
-            "capture_scalar_outputs": args.capture_scalar_outputs,
-            "simple_teacache_thresh": args.simple_teacache_thresh,
-            "simple_teacache_force_calc_steps": args.simple_teacache_force_calc_steps,
-            "simple_teacache_poly": args.simple_teacache_poly,
-            "simple_adacache": args.simple_adacache,
-            "simple_adacache_codebook": args.simple_adacache_codebook,
-            "num_clip_safety_margin": args.num_clip_safety_margin,
-            "use_lightvae": args.use_lightvae,
-            "use_tae": args.use_tae,
-            "vae_path": str(Path(args.vae_path).resolve()) if args.vae_path else None,
-            "vae_pruning_rate": args.vae_pruning_rate,
-            "tae_parallel": args.tae_parallel,
-            "full_online_postprocess": args.full_online_postprocess,
-            "relative_dist": args.relative_dist,
-            "warm_runs": args.warm_runs,
-            "direct_final_encode": args.direct_final_encode,
-            "warmup_runs": warmup_runs,
-            "cold_start": cold_start,
-            "runner_jobs_before": runner_jobs_before,
-            "runner_acquire_s": acquire_duration,
-            "pipeline_init_s": getattr(runner, "init_duration", 0.0) if cold_start else 0.0,
-            "render_s": primary_metrics["render_s"],
-            "clip_generation_s": primary_metrics["clip_generation_s"],
-            "postprocess_s": primary_metrics["postprocess_s"],
-            "postprocess_decode_s": primary_metrics["postprocess_decode_s"],
-            "postprocess_encode_s": primary_metrics["postprocess_encode_s"],
-            "upscale_s": primary_metrics["upscale_s"],
-            "generation_total_s": primary_metrics["generation_total_s"],
-            "generation_sec_per_audio_sec": primary_metrics["generation_sec_per_audio_sec"],
-            "total_s_including_runner_acquire": finished_at - runner_acquire_started,
-            "sec_per_audio_sec_including_runner_acquire": (finished_at - runner_acquire_started) / audio_duration,
-            "raw_output": str(raw_output),
-            "final_output": str(final_output),
-            "raw_visual": probe_visual_stats(raw_output) if raw_output.exists() else None,
-            "final_visual": probe_visual_stats(final_output) if final_output.exists() else None,
-            "upscale_progress": primary_metrics["upscale_progress"],
-            "event_trace": primary_metrics["event_trace"],
-            "clip_durations": primary_metrics["clip_durations"],
-            "postprocess_clip_durations": primary_metrics["postprocess_clip_durations"],
-            "profiler_cpu_table": primary_metrics["profiler_cpu_table"],
-            "profiler_cuda_table": primary_metrics["profiler_cuda_table"],
-        }
-        result_file = Path(args.result_file).resolve() if args.result_file else (output_dir / "benchmark.json")
-        write_json(output_dir / "primary_metrics.json", primary_metrics)
-        write_json(output_dir / "status.json", {"stage": "completed"})
-        heartbeat_path.unlink(missing_ok=True)
-        write_json(result_file, result)
-        print(json.dumps(result, indent=2))
-    except Exception as exc:
-        failure = {
-            "stage": "failed",
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-            "traceback": traceback.format_exc(),
+    write_json(
+        output_dir / "status.json",
+        {
+            "stage": "primary_run_started",
+            "warm_runs_completed": len(warmup_runs),
             "image": str(image_path),
             "audio": str(audio_path),
             "size": args.size,
             "infer_frames": args.infer_frames,
             "compile": args.compile,
-            "chunk_sizes": {
-                "cross_attn": args.cross_attn_chunk_size,
-                "rope": args.rope_chunk_size,
-                "attn_out": args.attn_out_chunk_size,
-                "qkv": args.qkv_chunk_size,
-            },
-            "runner_acquire_timeout_s": args.runner_acquire_timeout_s,
-            "direct_final_encode": args.direct_final_encode,
-        }
-        write_json(output_dir / "status.json", failure)
-        write_json(output_dir / "failure.json", failure)
-        flush_live_failure = {
-            "updated_at": time.time(),
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-        }
-        write_json(heartbeat_path, flush_live_failure)
-        raise
+        },
+    )
+    primary_metrics = run_once(raw_output, final_output, enable_profiler=args.torch_profiler)
+    finished_at = time.perf_counter()
+
+    result = {
+        "benchmark_policy": {
+            "primary_metric": "generation_total_s",
+            "primary_rate_metric": "generation_sec_per_audio_sec",
+            "compare_warm_runs_not_cold_start": True,
+            "notes": "Cold-start timings are diagnostic only. Compare generation timings from an already-loaded resident pipeline.",
+        },
+        "image": str(image_path),
+        "audio": str(audio_path),
+        "audio_duration": audio_duration,
+        "size": args.size,
+        "infer_frames": args.infer_frames,
+        "sample_steps": args.sample_steps,
+        "sample_solver": args.sample_solver,
+        "guide_scale": args.guide_scale,
+        "num_clip": num_clip,
+        "enable_online_decode": args.enable_online_decode,
+        "offload_model": args.offload_model,
+        "offload_kv_cache": args.offload_kv_cache,
+        "disable_cudnn_attn": args.disable_cudnn_attn,
+        "disable_flash_attn": args.disable_flash_attn,
+        "chunk_sizes": {
+            "cross_attn": args.cross_attn_chunk_size,
+            "rope": args.rope_chunk_size,
+            "attn_out": args.attn_out_chunk_size,
+            "qkv": args.qkv_chunk_size,
+        },
+        "compile": args.compile,
+        "compile_mode": args.compile_mode,
+        "compile_backend": args.compile_backend,
+        "compile_dynamic": args.compile_dynamic,
+        "capture_scalar_outputs": args.capture_scalar_outputs,
+        "simple_teacache_thresh": args.simple_teacache_thresh,
+        "simple_teacache_force_calc_steps": args.simple_teacache_force_calc_steps,
+        "simple_teacache_poly": args.simple_teacache_poly,
+        "simple_adacache": args.simple_adacache,
+        "simple_adacache_codebook": args.simple_adacache_codebook,
+        "num_clip_safety_margin": args.num_clip_safety_margin,
+        "use_lightvae": args.use_lightvae,
+        "use_tae": args.use_tae,
+        "vae_path": str(Path(args.vae_path).resolve()) if args.vae_path else None,
+        "vae_pruning_rate": args.vae_pruning_rate,
+        "tae_parallel": args.tae_parallel,
+        "full_online_postprocess": args.full_online_postprocess,
+        "relative_dist": args.relative_dist,
+        "warm_runs": args.warm_runs,
+        "direct_final_encode": args.direct_final_encode,
+        "warmup_runs": warmup_runs,
+        "cold_start": cold_start,
+        "runner_jobs_before": runner_jobs_before,
+        "runner_acquire_s": acquire_duration,
+        "pipeline_init_s": getattr(runner, "init_duration", 0.0) if cold_start else 0.0,
+        "render_s": primary_metrics["render_s"],
+        "clip_generation_s": primary_metrics["clip_generation_s"],
+        "postprocess_s": primary_metrics["postprocess_s"],
+        "postprocess_decode_s": primary_metrics["postprocess_decode_s"],
+        "postprocess_encode_s": primary_metrics["postprocess_encode_s"],
+        "upscale_s": primary_metrics["upscale_s"],
+        "generation_total_s": primary_metrics["generation_total_s"],
+        "generation_sec_per_audio_sec": primary_metrics["generation_sec_per_audio_sec"],
+        "total_s_including_runner_acquire": finished_at - runner_acquire_started,
+        "sec_per_audio_sec_including_runner_acquire": (finished_at - runner_acquire_started) / audio_duration,
+        "raw_output": str(raw_output),
+        "final_output": str(final_output),
+        "upscale_progress": primary_metrics["upscale_progress"],
+        "event_trace": primary_metrics["event_trace"],
+        "clip_durations": primary_metrics["clip_durations"],
+        "postprocess_clip_durations": primary_metrics["postprocess_clip_durations"],
+        "profiler_cpu_table": primary_metrics["profiler_cpu_table"],
+        "profiler_cuda_table": primary_metrics["profiler_cuda_table"],
+    }
+    result_file = Path(args.result_file).resolve() if args.result_file else (output_dir / "benchmark.json")
+    write_json(output_dir / "primary_metrics.json", primary_metrics)
+    write_json(output_dir / "status.json", {"stage": "completed"})
+    write_json(result_file, result)
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
