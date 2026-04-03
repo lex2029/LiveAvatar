@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import math
 import os
@@ -34,6 +36,15 @@ DEFAULT_PROMPT = (
 
 STOP_REQUESTED = False
 RUNNER: Optional["ResidentLiveAvatarRunner"] = None
+
+
+@dataclass(frozen=True)
+class RuntimeProfile:
+    name: str
+    infer_frames: int
+    sample_steps: int
+    direct_final_encode: bool
+    chunk_size: int = 512
 
 
 class JobStoppedByServer(RuntimeError):
@@ -404,6 +415,41 @@ def compute_num_clip(audio_duration: float, infer_frames: int, fps: int) -> int:
     return max(minimum, min(raw, maximum))
 
 
+def choose_runtime_profile(audio_duration: float) -> RuntimeProfile:
+    short_max_seconds = float(os.getenv("LIVEAVATAR_SHORT_AUDIO_MAX_SECONDS", "3.0"))
+    if audio_duration <= short_max_seconds:
+        return RuntimeProfile(
+            name="short",
+            infer_frames=int(os.getenv("LIVEAVATAR_SHORT_INFER_FRAMES", "64")),
+            sample_steps=int(os.getenv("LIVEAVATAR_SHORT_SAMPLE_STEPS", "4")),
+            direct_final_encode=os.getenv("LIVEAVATAR_SHORT_DIRECT_FINAL_ENCODE", "true").lower() == "true",
+            chunk_size=int(os.getenv("LIVEAVATAR_SHORT_CHUNK_SIZE", "512")),
+        )
+    return RuntimeProfile(
+        name="long",
+        infer_frames=int(os.getenv("LIVEAVATAR_LONG_INFER_FRAMES", "48")),
+        sample_steps=int(os.getenv("LIVEAVATAR_LONG_SAMPLE_STEPS", "4")),
+        direct_final_encode=os.getenv("LIVEAVATAR_LONG_DIRECT_FINAL_ENCODE", "false").lower() == "true",
+        chunk_size=int(os.getenv("LIVEAVATAR_LONG_CHUNK_SIZE", "512")),
+    )
+
+
+@contextmanager
+def temporary_env(overrides: Dict[str, str]):
+    old_values: Dict[str, Optional[str]] = {}
+    for key, value in overrides.items():
+        old_values[key] = os.environ.get(key)
+        os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, old_value in old_values.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
+
+
 def random_suffix(length: int = 8) -> str:
     alphabet = string.ascii_lowercase + string.digits
     return "".join(random.choice(alphabet) for _ in range(length))
@@ -750,16 +796,28 @@ def process_job(job_id: str) -> None:
             output_size = orientation_to_output_size(orientation)
             resize_image_to_render_aspect(image_path, render_size)
             prompt = choose_prompt(payload)
-            infer_frames = int(os.getenv("LIVEAVATAR_INFER_FRAMES", "48"))
             sample_fps = 25
             audio_duration = probe_audio_duration(audio_path)
+            runtime_profile = choose_runtime_profile(audio_duration)
+            infer_frames = runtime_profile.infer_frames
             num_clip = compute_num_clip(audio_duration, infer_frames=infer_frames, fps=sample_fps)
             base_seed = int(payload.get("seed") or os.getenv("LIVEAVATAR_BASE_SEED", "420"))
+            runtime_env = {
+                "LIVEAVATAR_INFER_FRAMES": str(runtime_profile.infer_frames),
+                "LIVEAVATAR_SAMPLE_STEPS": str(runtime_profile.sample_steps),
+                "LIVEAVATAR_DIRECT_FINAL_ENCODE": "true" if runtime_profile.direct_final_encode else "false",
+                "LIVEAVATAR_CROSS_ATTN_CHUNK_SIZE": str(runtime_profile.chunk_size),
+                "LIVEAVATAR_ROPE_CHUNK_SIZE": str(runtime_profile.chunk_size),
+                "LIVEAVATAR_ATTN_OUT_CHUNK_SIZE": str(runtime_profile.chunk_size),
+                "LIVEAVATAR_QKV_CHUNK_SIZE": str(runtime_profile.chunk_size),
+            }
 
             log(
                 f"Processing job {job_id}: orientation={orientation}, plan_key={plan_key}, "
                 f"render_size={render_size}, output_size={output_size}, "
-                f"audio_duration={audio_duration:.2f}s, num_clip={num_clip}"
+                f"audio_duration={audio_duration:.2f}s, num_clip={num_clip}, "
+                f"profile={runtime_profile.name}, infer_frames={runtime_profile.infer_frames}, "
+                f"direct_final={runtime_profile.direct_final_encode}, chunk={runtime_profile.chunk_size}"
             )
 
             runner, runner_cold_start, runner_acquire_duration = get_runner()
@@ -854,16 +912,17 @@ def process_job(job_id: str) -> None:
                 f"num_clip={num_clip}, plan_key={plan_key}, runner_cold_start={runner_cold_start}, "
                 f"runner_acquire={format_seconds(runner_acquire_duration)}, runner_jobs_before={runner_jobs_before})"
             )
-            runner.render(
-                image_path=image_path,
-                audio_path=audio_path,
-                output_path=raw_video_path,
-                size=render_size,
-                prompt=prompt,
-                num_clip=num_clip,
-                base_seed=base_seed,
-                progress_callback=on_render_progress,
-            )
+            with temporary_env(runtime_env):
+                runner.render(
+                    image_path=image_path,
+                    audio_path=audio_path,
+                    output_path=raw_video_path,
+                    size=render_size,
+                    prompt=prompt,
+                    num_clip=num_clip,
+                    base_seed=base_seed,
+                    progress_callback=on_render_progress,
+                )
             render_finished_at = time.perf_counter()
             runner.jobs_processed += 1
             clip_generation_duration = (
@@ -922,7 +981,8 @@ def process_job(job_id: str) -> None:
             )
             log(
                 f"Job {job_id} summary: orientation={orientation}, render_size={render_size}, "
-                f"output_size={output_size}, plan_key={plan_key}, audio={audio_duration:.1f}s, infer_frames={infer_frames}, "
+                f"output_size={output_size}, plan_key={plan_key}, audio={audio_duration:.1f}s, "
+                f"profile={runtime_profile.name}, infer_frames={infer_frames}, "
                 f"num_clip={num_clip}, cold_start={runner_cold_start}, "
                 f"runner_acquire={format_seconds(runner_acquire_duration)}, "
                 f"pipeline_init={format_seconds(runner.init_duration) if runner_cold_start else '0.0s'}, "
