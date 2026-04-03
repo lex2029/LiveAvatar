@@ -1131,6 +1131,8 @@ def main() -> int:
     idle_log_interval = float(os.getenv("WORKER_IDLE_LOG_INTERVAL_SECONDS", "300"))
     once = "--once" in sys.argv
     last_idle_log_at = 0.0
+    consecutive_poll_errors = 0
+    last_poll_error_at: Optional[float] = None
 
     if not TORCHRUN.exists():
         raise RuntimeError(f"torchrun not found: {TORCHRUN}")
@@ -1160,6 +1162,19 @@ def main() -> int:
             poll_started_at = time.perf_counter()
             job_ids = initial_poll()
             poll_duration = time.perf_counter() - poll_started_at
+            if consecutive_poll_errors > 0:
+                recovered_after = (
+                    time.monotonic() - last_poll_error_at
+                    if last_poll_error_at is not None
+                    else 0.0
+                )
+                log(
+                    f"Poll loop recovered after {consecutive_poll_errors} error(s) "
+                    f"in {format_seconds(recovered_after)}; "
+                    f"successful poll={format_seconds(poll_duration)}"
+                )
+                consecutive_poll_errors = 0
+                last_poll_error_at = None
             if job_ids:
                 log(f"Polled {len(job_ids)} queued job(s) in {format_seconds(poll_duration)}")
             else:
@@ -1176,7 +1191,9 @@ def main() -> int:
                     # The job failure is already reported back to the API.
                     continue
         except Exception as exc:
-            log(f"Poll loop error: {exc}")
+            consecutive_poll_errors += 1
+            last_poll_error_at = time.monotonic()
+            log(f"Poll loop error #{consecutive_poll_errors}: {exc}")
 
         if once:
             break
