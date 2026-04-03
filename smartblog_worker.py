@@ -1330,15 +1330,17 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float, fail_on
     payload["health_checks"] = health_checks
     payload["overall_ok"] = all(health_checks.values())
     warnings: List[str] = []
+    info: List[str] = []
     if payload["git_dirty"]:
         warnings.append("git_dirty")
     if payload["git_branch"] != "main":
         warnings.append(f"non_main_branch:{payload['git_branch']}")
     if payload["nvidia_smi"]["available"] and payload["nvidia_smi"]["cuda_version"] is None:
-        warnings.append("nvidia_smi_cuda_version_unavailable")
+        info.append("nvidia_smi_cuda_version_unavailable")
     if not payload["runner_state"]["runner_loaded"]:
-        warnings.append("runner_not_loaded")
+        info.append("runner_not_loaded")
     payload["warnings"] = warnings
+    payload["info"] = info
     if not payload["overall_ok"]:
         payload["status"] = "red"
     elif warnings:
