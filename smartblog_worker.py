@@ -583,12 +583,14 @@ class ResidentLiveAvatarRunner:
 
         self.dist = dist
         if not self.dist.is_initialized():
-            torch.cuda.set_device(0)
+            device = torch.device("cuda", 0)
+            torch.cuda.set_device(device)
             self.dist.init_process_group(
                 backend="nccl",
                 init_method="env://",
                 rank=0,
                 world_size=1,
+                device_id=device,
             )
 
     def _load_pipeline(self) -> None:
