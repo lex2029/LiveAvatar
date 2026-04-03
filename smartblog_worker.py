@@ -1257,6 +1257,24 @@ def runtime_profile_examples() -> Dict[str, Dict[str, Any]]:
     return examples
 
 
+def explain_audio_plan(audio_path: Path) -> Dict[str, Any]:
+    audio_duration = probe_audio_duration(audio_path)
+    sample_fps = 25
+    profile = choose_runtime_profile(audio_duration)
+    return {
+        "audio_path": str(audio_path),
+        "audio_duration_s": round(audio_duration, 3),
+        "selected_profile": profile.name,
+        "infer_frames": profile.infer_frames,
+        "sample_steps": profile.sample_steps,
+        "direct_final_encode": profile.direct_final_encode,
+        "chunk_size": profile.chunk_size,
+        "sample_fps": sample_fps,
+        "num_clip": compute_num_clip(audio_duration, infer_frames=profile.infer_frames, fps=sample_fps),
+        "save_path": "direct_final_nvenc" if profile.direct_final_encode else "standard_postprocess",
+    }
+
+
 def healthcheck_policy() -> Dict[str, Any]:
     allowed_branches_raw = os.getenv("HEALTHCHECK_ALLOWED_BRANCHES", "main")
     allowed_branches = [branch.strip() for branch in allowed_branches_raw.split(",") if branch.strip()]
@@ -1836,6 +1854,7 @@ def main() -> int:
     healthcheck_strict = "--healthcheck-strict" in sys.argv
     healthcheck_json_strict = "--healthcheck-json-strict" in sys.argv
     healthcheck_json_only_strict = "--healthcheck-json-only-strict" in sys.argv
+    explain_audio_json = "--explain-audio-json" in sys.argv
     last_idle_log_at = 0.0
     consecutive_poll_errors = 0
     last_poll_error_at: Optional[float] = None
@@ -1845,7 +1864,7 @@ def main() -> int:
     if not PYTHON_BIN.exists():
         raise RuntimeError(f"python not found: {PYTHON_BIN}")
 
-    if not (healthcheck_json_only or healthcheck_json_only_strict):
+    if not (healthcheck_json_only or healthcheck_json_only_strict or explain_audio_json):
         log(f"SmartBlog LiveAvatar worker started ({startup_summary(poll_interval, idle_log_interval)})")
 
     if healthcheck_json_only or healthcheck_json_only_strict:
@@ -1864,6 +1883,13 @@ def main() -> int:
         return run_healthcheck(poll_interval, idle_log_interval)
     if healthcheck_strict:
         return run_healthcheck_json(poll_interval, idle_log_interval, fail_on_warnings=True)
+    if explain_audio_json:
+        flag_index = sys.argv.index("--explain-audio-json")
+        if flag_index + 1 >= len(sys.argv):
+            raise RuntimeError("--explain-audio-json requires a path argument")
+        audio_path = Path(sys.argv[flag_index + 1]).expanduser().resolve()
+        print(json.dumps(explain_audio_plan(audio_path), sort_keys=True), flush=True)
+        return 0
 
     while not STOP_REQUESTED:
         try:
