@@ -1213,6 +1213,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "git_commit": git_commit_short(),
         "git_branch": git_branch_name(),
         "git_dirty": git_is_dirty(),
+        "worker_uptime_s": round(worker_uptime_seconds(), 3),
         "python_version": sys.version.split()[0],
         "torch_version": torch.__version__,
         "torch_cuda_version": getattr(torch.version, "cuda", None),
