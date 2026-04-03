@@ -69,6 +69,32 @@ def git_commit_short() -> str:
         return "unknown"
 
 
+def git_branch_name() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def git_is_dirty() -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
+
+
 def load_env_file(path: Path) -> None:
     if not path.exists():
         return
@@ -1036,6 +1062,8 @@ def process_job(job_id: str) -> None:
                 f"Job {job_id} summary: orientation={orientation}, render_size={render_size}, "
                 f"output_size={output_size}, plan_key={plan_key}, audio={audio_duration:.1f}s, "
                 f"git_commit={git_commit_short()}, "
+                f"git_branch={git_branch_name()}, "
+                f"git_dirty={git_is_dirty()}, "
                 f"profile={runtime_profile.name}, infer_frames={infer_frames}, "
                 f"sample_steps={runtime_profile.sample_steps}, "
                 f"direct_final={runtime_profile.direct_final_encode}, "
@@ -1102,6 +1130,8 @@ def main() -> int:
     log(
         "SmartBlog LiveAvatar worker started "
         f"(git_commit={git_commit_short()}, "
+        f"git_branch={git_branch_name()}, "
+        f"git_dirty={git_is_dirty()}, "
         f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
         f"portrait_render={os.getenv('LIVEAVATAR_RENDER_PORTRAIT_SIZE', '832*480')}, "
         f"landscape_render={os.getenv('LIVEAVATAR_RENDER_LANDSCAPE_SIZE', '480*832')}, "
