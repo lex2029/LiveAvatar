@@ -1326,6 +1326,12 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
     if not payload["runner_state"]["runner_loaded"]:
         warnings.append("runner_not_loaded")
     payload["warnings"] = warnings
+    if not payload["overall_ok"]:
+        payload["status"] = "red"
+    elif warnings:
+        payload["status"] = "yellow"
+    else:
+        payload["status"] = "green"
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
         payload["poll_skipped"] = True
         payload["poll_error"] = "worker API env is incomplete"
@@ -1345,6 +1351,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         payload["poll_error"] = str(exc)
         payload["health_checks"]["api_http_ready"] = False
         payload["overall_ok"] = False
+        payload["status"] = "red"
         print(json.dumps(payload, sort_keys=True), flush=True)
         return 1
 
