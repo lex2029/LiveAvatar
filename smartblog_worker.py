@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import math
 import os
@@ -93,6 +94,28 @@ def git_is_dirty() -> bool:
         return bool(result.stdout.strip())
     except Exception:
         return False
+
+
+def parse_timestamp_seconds(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
 
 
 def load_env_file(path: Path) -> None:
@@ -842,6 +865,10 @@ def process_job(job_id: str) -> None:
     assets = claim["assets"]
     upload = claim["upload"]
     job_started_at = time.perf_counter()
+    queue_wait_duration: Optional[float] = None
+    created_at_seconds = parse_timestamp_seconds(job.get("created_at"))
+    if created_at_seconds is not None:
+        queue_wait_duration = max(0.0, time.time() - created_at_seconds)
     try:
         ack = call_worker_api({"action": "progress", "job_id": job_id, "progress": 0})
         if ack.get("stop"):
@@ -898,6 +925,7 @@ def process_job(job_id: str) -> None:
                 f"Processing job {job_id}: orientation={orientation}, plan_key={plan_key}, "
                 f"render_size={render_size}, output_size={output_size}, "
                 f"audio_duration={audio_duration:.2f}s, num_clip={num_clip}, "
+                f"queue_wait={format_seconds(queue_wait_duration) if queue_wait_duration is not None else 'n/a'}, "
                 f"profile={runtime_profile.name}, infer_frames={runtime_profile.infer_frames}, "
                 f"direct_final={runtime_profile.direct_final_encode}, chunk={runtime_profile.chunk_size}"
             )
@@ -1069,6 +1097,7 @@ def process_job(job_id: str) -> None:
             log(
                 f"Job {job_id} summary: orientation={orientation}, render_size={render_size}, "
                 f"output_size={output_size}, plan_key={plan_key}, audio={audio_duration:.1f}s, "
+                f"queue_wait={format_seconds(queue_wait_duration) if queue_wait_duration is not None else 'n/a'}, "
                 f"claim={format_seconds(claim_duration)}, "
                 f"assets_download={format_seconds(assets_download_duration) if assets_download_duration is not None else 'n/a'}, "
                 f"git_commit={git_commit_short()}, "
