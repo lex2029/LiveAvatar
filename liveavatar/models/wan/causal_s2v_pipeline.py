@@ -1219,7 +1219,25 @@ class WanS2V:
                 )
 
                 self.vae.model.to(decode_latents.device)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(
+                            "postprocess_decode_start",
+                            clip_idx + 1,
+                            len(clip_outputs),
+                        )
+                    except Exception:
+                        pass
                 image = torch.stack(self.vae.decode(decode_latents))
+                if progress_callback is not None:
+                    try:
+                        progress_callback(
+                            "postprocess_decode_complete",
+                            clip_idx + 1,
+                            len(clip_outputs),
+                        )
+                    except Exception:
+                        pass
                 image = image[:, :, -(infer_frames):]
                 
                 if not enable_online_decode and clip_idx == 0:
@@ -1236,9 +1254,27 @@ class WanS2V:
                 videos_last_frames = videos_last_frames.to(
                     dtype=motion_latents_pp.dtype, device=motion_latents_pp.device
                 )
+                if progress_callback is not None:
+                    try:
+                        progress_callback(
+                            "postprocess_encode_start",
+                            clip_idx + 1,
+                            len(clip_outputs),
+                        )
+                    except Exception:
+                        pass
                 motion_latents_pp = torch.stack(
                     self.vae.encode(videos_last_frames)
                 ).type_as(clip_output)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(
+                            "postprocess_encode_complete",
+                            clip_idx + 1,
+                            len(clip_outputs),
+                        )
+                    except Exception:
+                        pass
                 out.append(image.cpu())
                 if progress_callback is not None:
                     try:
@@ -1250,7 +1286,17 @@ class WanS2V:
                     except Exception:
                         pass
 
+        if progress_callback is not None:
+            try:
+                progress_callback("postprocess_concat_start", 0, len(out))
+            except Exception:
+                pass
         videos = torch.cat(out, dim=2)
+        if progress_callback is not None:
+            try:
+                progress_callback("postprocess_concat_complete", 1, 1)
+            except Exception:
+                pass
         if progress_callback is not None:
             try:
                 progress_callback("postprocess_complete", 1, 1)

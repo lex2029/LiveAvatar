@@ -1,0 +1,251 @@
+{
+  "benchmark_policy": {
+    "primary_metric": "generation_total_s",
+    "primary_rate_metric": "generation_sec_per_audio_sec",
+    "compare_warm_runs_not_cold_start": true,
+    "notes": "Cold-start timings are diagnostic only. Compare generation timings from an already-loaded resident pipeline."
+  },
+  "image": "/root/LiveAvatar/examples/boy.jpg",
+  "audio": "/root/short2.wav",
+  "audio_duration": 2.0,
+  "size": "480*832",
+  "infer_frames": 48,
+  "sample_steps": 4,
+  "sample_solver": "euler",
+  "guide_scale": 0.0,
+  "num_clip": 4,
+  "enable_online_decode": null,
+  "offload_model": null,
+  "offload_kv_cache": null,
+  "disable_cudnn_attn": null,
+  "disable_flash_attn": null,
+  "chunk_sizes": {
+    "cross_attn": 256,
+    "rope": 256,
+    "attn_out": 256,
+    "qkv": 256
+  },
+  "compile": "true",
+  "compile_mode": null,
+  "compile_backend": "inductor",
+  "compile_dynamic": null,
+  "capture_scalar_outputs": null,
+  "simple_teacache_thresh": null,
+  "simple_teacache_force_calc_steps": null,
+  "simple_teacache_poly": null,
+  "simple_adacache": false,
+  "simple_adacache_codebook": null,
+  "num_clip_safety_margin": null,
+  "use_lightvae": false,
+  "use_tae": false,
+  "vae_path": null,
+  "vae_pruning_rate": null,
+  "tae_parallel": null,
+  "full_online_postprocess": false,
+  "relative_dist": null,
+  "warm_runs": 1,
+  "direct_final_encode": false,
+  "warmup_runs": [
+    {
+      "run": 1,
+      "render_s": 183.48296010200283,
+      "clip_generation_s": 111.56325614199159,
+      "postprocess_s": 55.77004693899653,
+      "postprocess_decode_s": null,
+      "postprocess_encode_s": null,
+      "upscale_s": 0.6936601380002685,
+      "generation_total_s": 184.17663413999253,
+      "generation_sec_per_audio_sec": 92.08831706999626,
+      "clip_durations": [
+        {
+          "clip_index": 1,
+          "clip_total": 2,
+          "duration_s": 89.24015684000915
+        },
+        {
+          "clip_index": 2,
+          "clip_total": 2,
+          "duration_s": 22.323092042002827
+        }
+      ],
+      "postprocess_clip_durations": []
+    }
+  ],
+  "cold_start": true,
+  "runner_jobs_before": 0,
+  "runner_acquire_s": 93.92766944301547,
+  "pipeline_init_s": 93.92766292300075,
+  "render_s": 125.53390120100812,
+  "clip_generation_s": 53.896014861995354,
+  "postprocess_s": 56.08930674899602,
+  "postprocess_decode_s": null,
+  "postprocess_encode_s": null,
+  "upscale_s": 0.7251882049895357,
+  "generation_total_s": 126.25910217600176,
+  "generation_sec_per_audio_sec": 63.12955108800088,
+  "total_s_including_runner_acquire": 404.364578534005,
+  "sec_per_audio_sec_including_runner_acquire": 202.1822892670025,
+  "raw_output": "/root/LiveAvatar_main/benchmarks/validate/stable_compile_2s/rendered_raw.mp4",
+  "final_output": "/root/LiveAvatar_main/benchmarks/validate/stable_compile_2s/rendered.mp4",
+  "raw_visual": {
+    "exists": true,
+    "valid": true,
+    "duration_s": 2.16,
+    "first_frame": {
+      "mean": 152.88057946285485,
+      "min": 0,
+      "max": 255,
+      "center": [
+        251,
+        250,
+        225
+      ],
+      "shape": [
+        448,
+        832,
+        3
+      ]
+    },
+    "mid_frame": {
+      "mean": 155.5211686913347,
+      "min": 0,
+      "max": 255,
+      "center": [
+        249,
+        247,
+        225
+      ],
+      "shape": [
+        448,
+        832,
+        3
+      ]
+    }
+  },
+  "final_visual": {
+    "exists": true,
+    "valid": true,
+    "duration_s": 2.16,
+    "first_frame": {
+      "mean": 152.1234859664352,
+      "min": 0,
+      "max": 255,
+      "center": [
+        253,
+        252,
+        227
+      ],
+      "shape": [
+        720,
+        1280,
+        3
+      ]
+    },
+    "mid_frame": {
+      "mean": 154.7977781394676,
+      "min": 0,
+      "max": 255,
+      "center": [
+        252,
+        250,
+        228
+      ],
+      "shape": [
+        720,
+        1280,
+        3
+      ]
+    }
+  },
+  "upscale_progress": {
+    "progress": 100,
+    "processed": 2.16,
+    "total": 2.16
+  },
+  "event_trace": [
+    {
+      "t_rel_s": 13.120141476014396,
+      "stage": "clip_start",
+      "clip_index": 1,
+      "clip_total": 2
+    },
+    {
+      "t_rel_s": 49.35931349400198,
+      "stage": "clip_complete",
+      "clip_index": 1,
+      "clip_total": 2
+    },
+    {
+      "t_rel_s": 49.35931637400063,
+      "stage": "clip_start",
+      "clip_index": 2,
+      "clip_total": 2
+    },
+    {
+      "t_rel_s": 67.01615633800975,
+      "stage": "clip_complete",
+      "clip_index": 2,
+      "clip_total": 2
+    },
+    {
+      "t_rel_s": 67.01620354902116,
+      "stage": "postprocess_start",
+      "clip_index": 0,
+      "clip_total": 2
+    },
+    {
+      "t_rel_s": 95.01441336399876,
+      "stage": "postprocess_clip_complete",
+      "clip_index": 1,
+      "clip_total": 2
+    },
+    {
+      "t_rel_s": 123.06131656901562,
+      "stage": "postprocess_clip_complete",
+      "clip_index": 2,
+      "clip_total": 2
+    },
+    {
+      "t_rel_s": 123.10551029801718,
+      "stage": "postprocess_complete",
+      "clip_index": 1,
+      "clip_total": 1
+    },
+    {
+      "t_rel_s": 125.93412623301265,
+      "stage": "upscale_progress",
+      "progress": 84,
+      "processed_seconds": 0.512,
+      "total_seconds": 2.16
+    },
+    {
+      "t_rel_s": 125.98251472201082,
+      "stage": "upscale_progress",
+      "progress": 98,
+      "processed_seconds": 2.000078,
+      "total_seconds": 2.16
+    },
+    {
+      "t_rel_s": 126.2589170029969,
+      "stage": "upscale_progress",
+      "progress": 100,
+      "processed_seconds": 2.16,
+      "total_seconds": 2.16
+    }
+  ],
+  "clip_durations": [
+    {
+      "clip_index": 1,
+      "clip_total": 2,
+      "duration_s": 36.239172017987585
+    },
+    {
+      "clip_index": 2,
+      "clip_total": 2,
+      "duration_s": 17.656839964009123
+    }
+  ],
+  "postprocess_clip_durations": [],
+  "profiler_cpu_table": null,
+  "profiler_cuda_table": null
+}
