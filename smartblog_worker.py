@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
-from PIL import Image
+from PIL import Image, __version__ as PILLOW_VERSION
 import torch
 
 
@@ -1126,6 +1126,8 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "python_version": sys.version.split()[0],
         "torch_version": torch.__version__,
         "torch_cuda_version": getattr(torch.version, "cuda", None),
+        "requests_version": getattr(requests, "__version__", None),
+        "pillow_version": PILLOW_VERSION,
         "worker_host": worker_host(),
         "worker_pid": worker_pid(),
         "cuda_visible_devices": worker_cuda_visible_devices(),
