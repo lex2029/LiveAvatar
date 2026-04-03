@@ -794,6 +794,17 @@ def worker_cuda_device_count() -> int:
         return 0
 
 
+def runtime_dependency_summary() -> str:
+    wan_ckpt = (REPO_ROOT / "ckpt" / "Wan2.2-S2V-14B").exists()
+    liveavatar_lora = (REPO_ROOT / "ckpt" / "LiveAvatar" / "liveavatar.safetensors").exists()
+    return (
+        f"torchrun_ready={TORCHRUN.exists()}, "
+        f"python_ready={PYTHON_BIN.exists()}, "
+        f"wan_ckpt_ready={wan_ckpt}, "
+        f"lora_ready={liveavatar_lora}"
+    )
+
+
 def normalize_video(
     input_path: Path,
     output_path: Path,
@@ -1227,6 +1238,7 @@ def main() -> int:
         f"cuda_visible_devices={worker_cuda_visible_devices()}, "
         f"cuda_available={worker_cuda_available()}, "
         f"cuda_device_count={worker_cuda_device_count()}, "
+        f"{runtime_dependency_summary()}, "
         f"ENABLE_COMPILE={os.getenv('ENABLE_COMPILE', 'true')}, "
         f"poll_interval={format_seconds(poll_interval)}, "
         f"idle_log_interval={format_seconds(idle_log_interval)}, "
