@@ -835,6 +835,11 @@ def process_job(job_id: str) -> None:
                 f"profile={runtime_profile.name}, infer_frames={runtime_profile.infer_frames}, "
                 f"direct_final={runtime_profile.direct_final_encode}, chunk={runtime_profile.chunk_size}"
             )
+            log(
+                f"Job {job_id} output path: "
+                f"{'direct_final_nvenc' if runtime_profile.direct_final_encode else 'standard_postprocess'} "
+                f"(raw_save={'fast_nvenc' if not runtime_profile.direct_final_encode else 'n/a'})"
+            )
 
             runner, runner_cold_start, runner_acquire_duration = get_runner()
             runner_jobs_before = runner.jobs_processed
@@ -1001,6 +1006,7 @@ def process_job(job_id: str) -> None:
                 f"profile={runtime_profile.name}, infer_frames={infer_frames}, "
                 f"sample_steps={runtime_profile.sample_steps}, "
                 f"direct_final={runtime_profile.direct_final_encode}, "
+                f"save_path={'direct_final_nvenc' if runtime_profile.direct_final_encode else 'standard_postprocess'}, "
                 f"chunk={runtime_profile.chunk_size}, "
                 f"num_clip={num_clip}, cold_start={runner_cold_start}, "
                 f"runner_acquire={format_seconds(runner_acquire_duration)}, "
