@@ -891,12 +891,22 @@ def disk_space_gb(path: Path) -> Optional[float]:
     return round(float(usage.free) / (1024**3), 2)
 
 
+def path_writable(path: Path) -> Optional[bool]:
+    try:
+        return os.access(path, os.W_OK)
+    except Exception:
+        return None
+
+
 def runtime_storage_info() -> Dict[str, Optional[float]]:
     generated_assets_dir = Path(os.getenv("GENERATED_ASSETS_DIR", str(REPO_ROOT)))
     return {
         "repo_free_gb": disk_space_gb(REPO_ROOT),
         "tmp_free_gb": disk_space_gb(Path("/tmp")),
         "generated_assets_free_gb": disk_space_gb(generated_assets_dir),
+        "repo_writable": path_writable(REPO_ROOT),
+        "tmp_writable": path_writable(Path("/tmp")),
+        "generated_assets_writable": path_writable(generated_assets_dir),
     }
 
 
