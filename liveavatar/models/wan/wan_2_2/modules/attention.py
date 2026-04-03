@@ -21,6 +21,8 @@ __all__ = [
     'attention',
     'cudnn_attention_forward_with_lse'
 ]
+
+
 def _sdpa_fallback(q, k, v, q_lens=None, k_lens=None, dropout_p=0.0, causal=False, dtype=torch.bfloat16):
     q_in = q
     b, lq = q.shape[0], q.shape[1]

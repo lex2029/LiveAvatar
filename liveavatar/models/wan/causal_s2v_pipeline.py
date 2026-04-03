@@ -33,7 +33,7 @@ from .causal_audio_encoder import AudioEncoder
 from .causal_audio_encoder import AudioEncoder_Training
 from .causal_model_s2v import CausalWanModel_S2V, sp_attn_forward_s2v
 from .wan_2_2.modules.t5 import T5EncoderModel
-from .wan_2_2.modules.vae2_1 import Wan2_1_TAE, Wan2_1_VAE
+from .wan_2_2.modules.vae2_1 import Wan2_1_VAE
 from .wan_2_2.utils.fm_solvers import (
     FlowDPMSolverMultistepScheduler,
     get_sampling_sigmas,
@@ -126,36 +126,9 @@ class WanS2V:
             shard_fn=shard_fn if t5_fsdp else None,
         )
 
-        vae_override_path = os.getenv("LIVEAVATAR_VAE_PATH", "").strip()
-        vae_checkpoint_path = (
-            vae_override_path
-            if vae_override_path
-            else os.path.join(checkpoint_dir, config.vae_checkpoint)
-        )
-        use_lightvae = os.getenv("LIVEAVATAR_USE_LIGHTVAE", "false").lower() == "true"
-        use_tae = os.getenv("LIVEAVATAR_USE_TAE", "false").lower() == "true"
-        tae_parallel = os.getenv("LIVEAVATAR_TAE_PARALLEL", "true").lower() == "true"
-        tae_encode_parallel_env = os.getenv("LIVEAVATAR_TAE_ENCODE_PARALLEL")
-        tae_decode_parallel_env = os.getenv("LIVEAVATAR_TAE_DECODE_PARALLEL")
-        tae_encode_parallel = tae_parallel if tae_encode_parallel_env is None else tae_encode_parallel_env.lower() == "true"
-        tae_decode_parallel = tae_parallel if tae_decode_parallel_env is None else tae_decode_parallel_env.lower() == "true"
-        if use_tae:
-            self.vae = Wan2_1_TAE(
-                tae_pth=vae_checkpoint_path,
-                device=self.device,
-                dtype=self.param_dtype,
-                parallel=tae_parallel,
-                encode_parallel=tae_encode_parallel,
-                decode_parallel=tae_decode_parallel,
-                need_scaled=True,
-            )
-        else:
-            self.vae = Wan2_1_VAE(
-                vae_pth=vae_checkpoint_path,
-                device=self.device,
-                dtype=self.param_dtype,
-                use_lightvae=use_lightvae,
-            )
+        self.vae = Wan2_1_VAE(
+            vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
+            device=self.device,dtype=self.param_dtype)
 
         if self.is_training:
             from liveavatar.models.wan.flow_match import FlowMatchScheduler_Omni
@@ -220,7 +193,6 @@ class WanS2V:
         self.drop_first_motion = config.drop_first_motion
         self.fps = config.sample_fps
         self.audio_sample_m = 0
-        self._prompt_cache = {}
 
     def _resolve_kv_cache_dtype(self):
         dtype_name = os.getenv("LIVEAVATAR_KV_CACHE_DTYPE", "").strip().lower()
@@ -576,19 +548,6 @@ class WanS2V:
         context_null = None
         if n_prompt == "": #case 3
             n_prompt = self.sample_neg_prompt
-
-        cache_key = (
-            input_prompt,
-            n_prompt,
-            bool(self.t5_cpu),
-            str(self.device),
-        )
-        cached = self._prompt_cache.get(cache_key)
-        if cached is not None:
-            cached_context, cached_context_null = cached
-            context = [tensor.clone() for tensor in cached_context]
-            context_null = None if cached_context_null is None else [tensor.clone() for tensor in cached_context_null]
-            return context, context_null
             
         if not self.t5_cpu:
             self.text_encoder.model.to(self.device)
@@ -603,11 +562,7 @@ class WanS2V:
             if n_prompt is not None:
                 context_null = self.text_encoder([n_prompt], torch.device('cpu'))
                 context_null = [t.to(self.device) for t in context_null]
-
-        self._prompt_cache[cache_key] = (
-            [tensor.detach().clone() for tensor in context],
-            None if context_null is None else [tensor.detach().clone() for tensor in context_null],
-        )
+                
         return context, context_null
 
     def load_pose_cond(self, pose_video, num_repeat, infer_frames, size):
@@ -1008,10 +963,6 @@ class WanS2V:
         ):
             out = []
             clip_outputs = []
-            full_online_postprocess = (
-                os.getenv("LIVEAVATAR_ENABLE_FULL_ONLINE_POSTPROCESS", "false").lower()
-                == "true"
-            )
             self.kv_cache1 = None
             self.shared_cond_cache = None
             cache_slot_count = max(1, int(sampling_steps))
@@ -1193,7 +1144,7 @@ class WanS2V:
 
 
                 #----------------------------------------------Step 2.3: clip-level postprocess---------------------------------
-                if (r == 0 and enable_online_decode) or full_online_postprocess:
+                if r == 0 and enable_online_decode:
                     if offload_model:
                         print(f"offloading model to cpu, please wait...")
                         self.noise_model.cpu()
@@ -1206,8 +1157,7 @@ class WanS2V:
                     self.vae.model.to(decode_latents.device)
                     image = torch.stack(self.vae.decode(decode_latents))
                     image = image[:, :, -(infer_frames):]
-                    if r == 0:
-                        image = image[:, :, 3:]
+                    image = image[:, :, 3:]
 
                     overlap_frames_num = min(self.motion_frames, image.shape[2])
                     videos_last_frames = torch.cat(
@@ -1268,26 +1218,8 @@ class WanS2V:
                     [motion_latents_pp, clip_output.unsqueeze(0)], dim=2
                 )
 
-                if progress_callback is not None:
-                    try:
-                        progress_callback(
-                            "postprocess_decode_start",
-                            clip_idx + 1,
-                            len(clip_outputs),
-                        )
-                    except Exception:
-                        pass
                 self.vae.model.to(decode_latents.device)
                 image = torch.stack(self.vae.decode(decode_latents))
-                if progress_callback is not None:
-                    try:
-                        progress_callback(
-                            "postprocess_decode_complete",
-                            clip_idx + 1,
-                            len(clip_outputs),
-                        )
-                    except Exception:
-                        pass
                 image = image[:, :, -(infer_frames):]
                 
                 if not enable_online_decode and clip_idx == 0:
@@ -1304,27 +1236,9 @@ class WanS2V:
                 videos_last_frames = videos_last_frames.to(
                     dtype=motion_latents_pp.dtype, device=motion_latents_pp.device
                 )
-                if progress_callback is not None:
-                    try:
-                        progress_callback(
-                            "postprocess_encode_start",
-                            clip_idx + 1,
-                            len(clip_outputs),
-                        )
-                    except Exception:
-                        pass
                 motion_latents_pp = torch.stack(
                     self.vae.encode(videos_last_frames)
                 ).type_as(clip_output)
-                if progress_callback is not None:
-                    try:
-                        progress_callback(
-                            "postprocess_encode_complete",
-                            clip_idx + 1,
-                            len(clip_outputs),
-                        )
-                    except Exception:
-                        pass
                 out.append(image.cpu())
                 if progress_callback is not None:
                     try:
