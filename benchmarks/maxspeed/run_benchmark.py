@@ -5,6 +5,7 @@ import importlib.util
 import inspect
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -72,7 +73,32 @@ def parse_args():
     parser.add_argument("--warm-runs", type=int, default=0)
     parser.add_argument("--torch-profiler", action="store_true", default=False)
     parser.add_argument("--direct-final-encode", action="store_true", default=False)
+    parser.add_argument("--runner-acquire-timeout-s", type=float, default=60.0)
     return parser.parse_args()
+
+
+class RunnerAcquireTimeout(TimeoutError):
+    pass
+
+
+def acquire_runner_with_timeout(mod, timeout_s: float):
+    if timeout_s <= 0:
+        return mod.get_runner()
+    if not hasattr(signal, "setitimer"):
+        return mod.get_runner()
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_alarm(signum, frame):
+        raise RunnerAcquireTimeout(f"runner acquire exceeded {timeout_s:.1f}s")
+
+    signal.signal(signal.SIGALRM, _handle_alarm)
+    signal.setitimer(signal.ITIMER_REAL, timeout_s)
+    try:
+        return mod.get_runner()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def probe_visual_stats(video_path: Path) -> dict:
@@ -261,6 +287,7 @@ def main():
             "infer_frames": args.infer_frames,
             "num_clip": num_clip,
             "compile": args.compile,
+            "runner_acquire_timeout_s": args.runner_acquire_timeout_s,
             "chunk_sizes": {
                 "cross_attn": args.cross_attn_chunk_size,
                 "rope": args.rope_chunk_size,
@@ -278,12 +305,11 @@ def main():
             "audio_duration": audio_duration,
             "num_clip": num_clip,
             "compile": args.compile,
+            "runner_acquire_timeout_s": args.runner_acquire_timeout_s,
         },
     )
 
     runner_acquire_started = time.perf_counter()
-    runner, cold_start, acquire_duration = mod.get_runner()
-    runner_jobs_before = runner.jobs_processed
     prompt = args.prompt or mod.DEFAULT_PROMPT
     size_h, size_w = map(int, args.size.split("*"))
     output_size = "720*1280" if size_w >= size_h else "1280*720"
@@ -553,21 +579,23 @@ def main():
             warmup_runs[-1],
         )
 
-    write_json(
-        output_dir / "status.json",
-        {
-            "stage": "primary_run_started",
-            "warm_runs_completed": len(warmup_runs),
-            "image": str(image_path),
-            "audio": str(audio_path),
-            "audio_duration": audio_duration,
-            "size": args.size,
-            "infer_frames": args.infer_frames,
-            "num_clip": num_clip,
-            "compile": args.compile,
-        },
-    )
     try:
+        runner, cold_start, acquire_duration = acquire_runner_with_timeout(mod, args.runner_acquire_timeout_s)
+        runner_jobs_before = runner.jobs_processed
+        write_json(
+            output_dir / "status.json",
+            {
+                "stage": "primary_run_started",
+                "warm_runs_completed": len(warmup_runs),
+                "image": str(image_path),
+                "audio": str(audio_path),
+                "audio_duration": audio_duration,
+                "size": args.size,
+                "infer_frames": args.infer_frames,
+                "num_clip": num_clip,
+                "compile": args.compile,
+            },
+        )
         primary_metrics = run_once(raw_output, final_output, enable_profiler=args.torch_profiler)
         finished_at = time.perf_counter()
 
@@ -667,6 +695,7 @@ def main():
                 "attn_out": args.attn_out_chunk_size,
                 "qkv": args.qkv_chunk_size,
             },
+            "runner_acquire_timeout_s": args.runner_acquire_timeout_s,
             "direct_final_encode": args.direct_final_encode,
         }
         write_json(output_dir / "status.json", failure)
