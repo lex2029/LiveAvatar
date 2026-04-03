@@ -50,6 +50,10 @@ def should_skip_init():
     return os.getenv("LIVEAVATAR_SKIP_T5_INIT", "true").lower() == "true"
 
 
+def should_mmap_checkpoint():
+    return os.getenv("LIVEAVATAR_T5_CHECKPOINT_MMAP", "true").lower() == "true"
+
+
 class GELU(nn.Module):
 
     def forward(self, x):
@@ -503,7 +507,10 @@ class T5EncoderModel:
             dtype=dtype,
             device=device).eval().requires_grad_(False)
         logging.info(f'loading {checkpoint_path}')
-        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+        load_kwargs = dict(map_location='cpu')
+        if should_mmap_checkpoint():
+            load_kwargs['mmap'] = True
+        model.load_state_dict(torch.load(checkpoint_path, **load_kwargs))
         self.model = model
         if shard_fn is not None:
             self.model = shard_fn(self.model, sync_module_states=False)
