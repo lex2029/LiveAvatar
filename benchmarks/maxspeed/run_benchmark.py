@@ -554,34 +554,33 @@ def main():
     def write_json(path: Path, payload):
         path.write_text(json.dumps(payload, indent=2) + "\n")
 
-    warmup_runs = []
-    for warm_idx in range(args.warm_runs):
-        warm_raw = output_dir / f"warmup_{warm_idx + 1}_raw.mp4"
-        warm_final = output_dir / f"warmup_{warm_idx + 1}.mp4"
-        warm_metrics = run_once(warm_raw, warm_final)
-        warmup_runs.append(
-            {
-                "run": warm_idx + 1,
-                "render_s": warm_metrics["render_s"],
-                "clip_generation_s": warm_metrics["clip_generation_s"],
-                "postprocess_s": warm_metrics["postprocess_s"],
-                "postprocess_decode_s": warm_metrics["postprocess_decode_s"],
-                "postprocess_encode_s": warm_metrics["postprocess_encode_s"],
-                "upscale_s": warm_metrics["upscale_s"],
-                "generation_total_s": warm_metrics["generation_total_s"],
-                "generation_sec_per_audio_sec": warm_metrics["generation_sec_per_audio_sec"],
-                "clip_durations": warm_metrics["clip_durations"],
-                "postprocess_clip_durations": warm_metrics["postprocess_clip_durations"],
-            }
-        )
-        write_json(
-            output_dir / f"warmup_{warm_idx + 1}_metrics.json",
-            warmup_runs[-1],
-        )
-
     try:
         runner, cold_start, acquire_duration = acquire_runner_with_timeout(mod, args.runner_acquire_timeout_s)
         runner_jobs_before = runner.jobs_processed
+        warmup_runs = []
+        for warm_idx in range(args.warm_runs):
+            warm_raw = output_dir / f"warmup_{warm_idx + 1}_raw.mp4"
+            warm_final = output_dir / f"warmup_{warm_idx + 1}.mp4"
+            warm_metrics = run_once(warm_raw, warm_final)
+            warmup_runs.append(
+                {
+                    "run": warm_idx + 1,
+                    "render_s": warm_metrics["render_s"],
+                    "clip_generation_s": warm_metrics["clip_generation_s"],
+                    "postprocess_s": warm_metrics["postprocess_s"],
+                    "postprocess_decode_s": warm_metrics["postprocess_decode_s"],
+                    "postprocess_encode_s": warm_metrics["postprocess_encode_s"],
+                    "upscale_s": warm_metrics["upscale_s"],
+                    "generation_total_s": warm_metrics["generation_total_s"],
+                    "generation_sec_per_audio_sec": warm_metrics["generation_sec_per_audio_sec"],
+                    "clip_durations": warm_metrics["clip_durations"],
+                    "postprocess_clip_durations": warm_metrics["postprocess_clip_durations"],
+                }
+            )
+            write_json(
+                output_dir / f"warmup_{warm_idx + 1}_metrics.json",
+                warmup_runs[-1],
+            )
         write_json(
             output_dir / "status.json",
             {
