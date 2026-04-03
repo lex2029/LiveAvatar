@@ -985,6 +985,26 @@ def worker_api_dns_info() -> Dict[str, Any]:
     return info
 
 
+def worker_api_connectivity_info() -> Dict[str, Any]:
+    host = worker_api_host()
+    info: Dict[str, Any] = {
+        "host": host,
+        "port": 443,
+        "reachable": False,
+        "connect_s": None,
+    }
+    if host == "unknown":
+        return info
+    started_at = time.perf_counter()
+    try:
+        with socket.create_connection((host, 443), timeout=5.0):
+            info["reachable"] = True
+            info["connect_s"] = round(time.perf_counter() - started_at, 3)
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
 def runtime_dependency_summary() -> str:
     flags = runtime_dependency_flags()
     return (
@@ -1102,6 +1122,7 @@ def run_healthcheck_json(poll_interval: float, idle_log_interval: float) -> int:
         "profiles": runtime_profile_config(),
         "enable_compile": os.getenv("ENABLE_COMPILE", "true"),
         "worker_api_dns": worker_api_dns_info(),
+        "worker_api_connectivity": worker_api_connectivity_info(),
     }
     if not os.getenv("SUPABASE_URL") or not os.getenv("WORKER_API_KEY"):
         payload["poll_skipped"] = True
