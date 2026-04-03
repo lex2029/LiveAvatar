@@ -1241,6 +1241,7 @@ def runtime_save_paths() -> Dict[str, str]:
 
 def runtime_profile_examples() -> Dict[str, Dict[str, Any]]:
     examples: Dict[str, Dict[str, Any]] = {}
+    sample_fps = 25
     for audio_duration in (2.0, 3.1, 10.0, 30.0):
         profile = choose_runtime_profile(audio_duration)
         examples[f"{audio_duration:.1f}s"] = {
@@ -1249,6 +1250,8 @@ def runtime_profile_examples() -> Dict[str, Dict[str, Any]]:
             "sample_steps": profile.sample_steps,
             "direct_final_encode": profile.direct_final_encode,
             "chunk_size": profile.chunk_size,
+            "sample_fps": sample_fps,
+            "num_clip": compute_num_clip(audio_duration, infer_frames=profile.infer_frames, fps=sample_fps),
             "save_path": "direct_final_nvenc" if profile.direct_final_encode else "standard_postprocess",
         }
     return examples
