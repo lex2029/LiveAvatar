@@ -799,10 +799,29 @@ def process_job(job_id: str) -> None:
         return
 
     job = claim.get("job", {})
+    if job.get("job_type") not in {None, "", "render_video"}:
+        unsupported = f"Unsupported job_type for this worker: {job.get('job_type')}"
+        log(f"Job {job_id} {unsupported}")
+        try:
+            call_worker_api({"action": "fail", "job_id": job_id, "error_text": unsupported})
+        except Exception as fail_exc:
+            log(f"Could not mark unsupported job {job_id} as failed: {fail_exc}")
+        return
     payload = job.get("payload", {}) or {}
     assets = claim["assets"]
     upload = claim["upload"]
     job_started_at = time.perf_counter()
+    try:
+        ack = call_worker_api({"action": "progress", "job_id": job_id, "progress": 0})
+        if ack.get("stop"):
+            raise JobStoppedByServer(
+                f"Server stopped job: {ack.get('status', 'unknown')} / {ack.get('reason', 'no reason')}"
+            )
+        log(f"Job {job_id} progress: 0% (claimed)")
+    except JobStoppedByServer:
+        raise
+    except Exception as progress_exc:
+        log(f"Job {job_id} initial progress update failed at 0%: {progress_exc}")
 
     with tempfile.TemporaryDirectory(prefix=f"smartblog_{job_id}_", dir=str(REPO_ROOT / "worker_runs")) as temp_dir:
         temp_root = Path(temp_dir)
@@ -1045,9 +1064,15 @@ def process_job(job_id: str) -> None:
 
 
 def initial_poll() -> List[str]:
-    result = call_worker_api({"action": "poll"})
+    result = call_worker_api({"action": "poll", "job_type": "render_video"})
     jobs = result.get("jobs", []) or []
-    return [job["id"] for job in jobs if isinstance(job, dict) and job.get("id")]
+    return [
+        job["id"]
+        for job in jobs
+        if isinstance(job, dict)
+        and job.get("id")
+        and job.get("job_type") in {None, "", "render_video"}
+    ]
 
 
 def handle_signal(signum: int, _frame: Any) -> None:
