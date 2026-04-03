@@ -808,8 +808,7 @@ def process_job(job_id: str) -> None:
                 orientation = detect_orientation(image_path)
 
             plan_key = plan_key_for_job(job, payload)
-            is_free_plan = plan_key == "free"
-            render_size = orientation_to_free_render_size(orientation) if is_free_plan else orientation_to_render_size(orientation)
+            render_size = orientation_to_render_size(orientation)
             output_size = orientation_to_output_size(orientation)
             resize_image_to_render_aspect(image_path, render_size)
             prompt = choose_prompt(payload)
