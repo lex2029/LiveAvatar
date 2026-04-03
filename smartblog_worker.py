@@ -745,8 +745,10 @@ def get_runner() -> ResidentLiveAvatarRunner:
 def cleanup_runner() -> None:
     global RUNNER
     if RUNNER is None:
+        log("Resident runner cleanup: runner_loaded=False")
         return
     try:
+        log(f"Resident runner cleanup: {runner_state_summary()}")
         RUNNER.shutdown()
     finally:
         RUNNER = None
@@ -1249,8 +1251,12 @@ def main() -> int:
             break
         time.sleep(poll_interval)
 
+    stop_runner_state = runner_state_summary()
     cleanup_runner()
-    log("SmartBlog LiveAvatar worker stopped")
+    log(
+        "SmartBlog LiveAvatar worker stopped "
+        f"(worker_uptime={format_seconds(worker_uptime_seconds())}, {stop_runner_state})"
+    )
     return 0
 
 
