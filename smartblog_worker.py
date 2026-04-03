@@ -1147,13 +1147,15 @@ def main() -> int:
 
     while not STOP_REQUESTED:
         try:
+            poll_started_at = time.perf_counter()
             job_ids = initial_poll()
+            poll_duration = time.perf_counter() - poll_started_at
             if job_ids:
-                log(f"Polled {len(job_ids)} queued job(s)")
+                log(f"Polled {len(job_ids)} queued job(s) in {format_seconds(poll_duration)}")
             else:
                 now = time.monotonic()
                 if now - last_idle_log_at >= idle_log_interval:
-                    log("Worker idle heartbeat: queue empty")
+                    log(f"Worker idle heartbeat: queue empty (poll={format_seconds(poll_duration)})")
                     last_idle_log_at = now
             for job_id in job_ids:
                 if STOP_REQUESTED:
