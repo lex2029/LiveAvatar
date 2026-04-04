@@ -236,3 +236,4 @@ VBench
 *.pt
 worker.pid
 ckpt/enhancers/
+gfpgan/weights/

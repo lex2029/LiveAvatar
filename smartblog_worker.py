@@ -685,7 +685,11 @@ def _stream_rgb24_tensor_to_ffmpeg(
         stdin.write(chunk.numpy().tobytes())
 
 
-def orientation_to_render_size(orientation: str) -> str:
+def orientation_to_render_size(orientation: str, plan_key: str = "pro") -> str:
+    if plan_key == "free":
+        if orientation == "landscape":
+            return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE_FREE", "256*448")
+        return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE_FREE", "448*256")
     if orientation == "landscape":
         return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE", "448*832")
     return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE", "832*448")
@@ -841,6 +845,8 @@ class ResidentLiveAvatarRunner:
         self.cfg = WAN_CONFIGS["s2v-14B"]
         self.training_settings = training_config_parser(str(REPO_ROOT / "liveavatar/configs/s2v_causal_sft.yaml"))
         self.MAX_AREA_CONFIGS.setdefault("256*384", 256 * 384)
+        self.MAX_AREA_CONFIGS.setdefault("448*256", 448 * 256)
+        self.MAX_AREA_CONFIGS.setdefault("256*448", 256 * 448)
 
         log("Loading LiveAvatar pipeline into resident worker memory")
         offload_kv_cache = os.getenv("LIVEAVATAR_OFFLOAD_KV_CACHE", "false").lower() == "true"
@@ -1878,7 +1884,7 @@ def process_job(job_id: str) -> None:
                 orientation = detect_orientation(image_path)
 
             plan_key = plan_key_for_job(job, payload)
-            render_size = orientation_to_render_size(orientation)
+            render_size = orientation_to_render_size(orientation, plan_key)
             output_size = orientation_to_output_size(orientation)
             resize_image_to_render_aspect(image_path, render_size)
             prompt = choose_prompt(payload)
