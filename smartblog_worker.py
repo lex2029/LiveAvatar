@@ -41,6 +41,7 @@ DEFAULT_PROMPT = (
 STOP_REQUESTED = False
 RUNNER: Optional["ResidentLiveAvatarRunner"] = None
 PROCESS_STARTED_AT = time.monotonic()
+PIDFILE = REPO_ROOT / "worker.pid"
 
 
 @dataclass(frozen=True)
@@ -1956,9 +1957,54 @@ def handle_signal(signum: int, _frame: Any) -> None:
     log(f"Received signal {signum}, stopping after current iteration")
 
 
+def _acquire_pidfile() -> bool:
+    """Write our PID to worker.pid; abort if another worker is already running."""
+    my_pid = os.getpid()
+    if PIDFILE.exists():
+        try:
+            old_pid = int(PIDFILE.read_text().strip())
+            if old_pid != my_pid:
+                # Check if that process is still alive
+                try:
+                    os.kill(old_pid, 0)
+                    # Process exists — check if it's actually a smartblog worker
+                    cmdline_path = Path(f"/proc/{old_pid}/cmdline")
+                    if cmdline_path.exists():
+                        cmdline = cmdline_path.read_bytes().decode(errors="replace")
+                        if "smartblog_worker" in cmdline:
+                            return False  # Another worker is running
+                except (OSError, ProcessLookupError):
+                    pass  # Process is dead, stale pidfile
+        except (ValueError, OSError):
+            pass  # Corrupted pidfile, overwrite
+    PIDFILE.write_text(str(my_pid))
+    return True
+
+
+def _release_pidfile() -> None:
+    try:
+        if PIDFILE.exists() and PIDFILE.read_text().strip() == str(os.getpid()):
+            PIDFILE.unlink()
+    except OSError:
+        pass
+
+
 def main() -> int:
     load_config_file(CONFIG_PATH)
     load_env_file(ENV_PATH)
+
+    if not _acquire_pidfile():
+        old_pid = PIDFILE.read_text().strip()
+        log(f"Another worker is already running (PID {old_pid}). Exiting.")
+        return 1
+
+    try:
+        return _main_inner()
+    finally:
+        _release_pidfile()
+
+
+def _main_inner() -> int:
     ensure_checkpoints()
     apply_runtime_torch_settings()
     (REPO_ROOT / "worker_runs").mkdir(exist_ok=True)

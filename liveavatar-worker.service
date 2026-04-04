@@ -5,12 +5,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/LiveAvatar
+WorkingDirectory=/home/lex2029/LiveAvatar
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/bin/bash -lc 'source /root/LiveAvatar/.venv/bin/activate && exec python /root/LiveAvatar/smartblog_worker.py'
+Environment=HOME=/home/lex2029
+Environment=VIRTUAL_ENV=/home/lex2029/LiveAvatar/.venv
+Environment=PATH=/home/lex2029/LiveAvatar/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/lex2029/LiveAvatar/.venv/bin/python /home/lex2029/LiveAvatar/smartblog_worker.py
 Restart=always
-RestartSec=5
-User=root
+RestartSec=10
+User=lex2029
 
 [Install]
 WantedBy=multi-user.target

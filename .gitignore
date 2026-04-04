@@ -234,3 +234,4 @@ cogvideox_output
 
 VBench
 *.pt
+worker.pid
