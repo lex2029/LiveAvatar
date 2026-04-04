@@ -128,9 +128,20 @@ class WanS2V:
             shard_fn=shard_fn if t5_fsdp else None,
         )
 
-        self.vae = Wan2_1_VAE(
-            vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
-            device=self.device,dtype=self.param_dtype)
+        vae_override_path = os.getenv("LIVEAVATAR_VAE_PATH", "").strip()
+        vae_checkpoint_path = vae_override_path if vae_override_path else os.path.join(
+            checkpoint_dir, config.vae_checkpoint)
+
+        use_lightvae = os.getenv("LIVEAVATAR_USE_LIGHTVAE", "false").lower() == "true"
+        if use_lightvae:
+            self.vae = Wan2_1_VAE(
+                vae_pth=vae_checkpoint_path,
+                device=self.device, dtype=self.param_dtype,
+                use_lightvae=True)
+        else:
+            self.vae = Wan2_1_VAE(
+                vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
+                device=self.device, dtype=self.param_dtype)
 
         if self.is_training:
             from liveavatar.models.wan.flow_match import FlowMatchScheduler_Omni
