@@ -89,10 +89,11 @@ def _write_streaming_kv_cache(cache_tensor, start_idx, values):
         cache_tensor[:, start_idx:end_idx] = values
         return start_idx, min(cache_size, end_idx)
 
-    first_len = cache_size - start_idx
-    second_len = end_idx - cache_size
-    cache_tensor[:, start_idx:] = values[:, :first_len]
-    cache_tensor[:, :second_len] = values[:, first_len:]
+    # Clamp write to cache bounds — don't wrap around to preserve
+    # prefill/conditioning data at the start of the cache
+    write_len = cache_size - start_idx
+    if write_len > 0:
+        cache_tensor[:, start_idx:cache_size] = values[:, :write_len]
     return start_idx, cache_size
 
 
