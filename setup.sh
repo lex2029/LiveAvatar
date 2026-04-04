@@ -94,21 +94,18 @@ ensure_checkpoints()
 if [ "${1:-}" != "--no-service" ]; then
     echo ""
     echo "Installing systemd service (auto-start on boot)..."
-    SERVICE_FILE="/etc/systemd/system/liveavatar-worker.service"
-    cat > /tmp/liveavatar-worker.service << EOF
+    SERVICE_FILE="/etc/systemd/system/liveavatar-watchdog.service"
+    cat > /tmp/liveavatar-watchdog.service << EOF
 [Unit]
-Description=SmartBlog LiveAvatar Worker
+Description=SmartBlog LiveAvatar Watchdog
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=$REPO_ROOT
-Environment=PYTHONUNBUFFERED=1
 Environment=HOME=$HOME
-Environment=VIRTUAL_ENV=$VENV_DIR
-Environment=PATH=$VENV_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=$VENV_DIR/bin/python $REPO_ROOT/smartblog_worker.py
+ExecStart=/bin/bash $REPO_ROOT/watchdog.sh
 Restart=always
 RestartSec=10
 User=$(whoami)
@@ -116,12 +113,16 @@ User=$(whoami)
 [Install]
 WantedBy=multi-user.target
 EOF
-    sudo cp /tmp/liveavatar-worker.service "$SERVICE_FILE"
+    sudo cp /tmp/liveavatar-watchdog.service "$SERVICE_FILE"
+    # Disable old service if exists
+    sudo systemctl disable liveavatar-worker 2>/dev/null || true
+    sudo systemctl stop liveavatar-worker 2>/dev/null || true
     sudo systemctl daemon-reload
-    sudo systemctl enable liveavatar-worker
-    sudo systemctl start liveavatar-worker
-    echo "Service installed and started. Auto-starts on boot."
-    echo "Logs: journalctl -u liveavatar-worker -f"
+    sudo systemctl enable liveavatar-watchdog
+    sudo systemctl start liveavatar-watchdog
+    echo "Watchdog service installed and started. Auto-starts on boot."
+    echo "Logs: journalctl -u liveavatar-watchdog -f"
+    echo "Worker log: tail -f $REPO_ROOT/watchdog.log"
 else
     echo ""
     echo "Skipped service install (--no-service flag)"
