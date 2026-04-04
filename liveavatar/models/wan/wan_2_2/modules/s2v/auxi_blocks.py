@@ -1,6 +1,8 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import importlib.metadata
 import math
+import os
+import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -73,11 +75,26 @@ def attention(
         x = F.scaled_dot_product_attention(
             q, k, v, attn_mask=attn_mask, dropout_p=drop_rate, is_causal=causal)
     elif mode == "flash":
-        x = flash_attn_func(
-            q,
-            k,
-            v,
-        )
+        if os.getenv("LIVEAVATAR_DISABLE_FLASH_ATTN", "true").lower() == "true" or flash_attn_func is None:
+            x = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_mask, dropout_p=drop_rate, is_causal=causal
+            )
+        else:
+            try:
+                x = flash_attn_func(
+                    q,
+                    k,
+                    v,
+                )
+            except RuntimeError as exc:
+                if "no kernel image is available" not in str(exc):
+                    raise
+                warnings.warn(
+                    "FlashAttention kernel is unavailable in auxi_blocks; falling back to PyTorch SDPA."
+                )
+                x = F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=attn_mask, dropout_p=drop_rate, is_causal=causal
+                )
         # x with shape [(bxs), a, d]
         x = x.view(batch_size, max_seqlen_q, x.shape[-2],
                    x.shape[-1])  # reshape x to [b, s, a, d]
