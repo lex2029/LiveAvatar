@@ -90,10 +90,10 @@ from smartblog_worker import ensure_checkpoints
 ensure_checkpoints()
 "
 
-# ── Install systemd service (optional) ──
-if [ "${1:-}" = "--install-service" ]; then
+# ── Install systemd service ──
+if [ "${1:-}" != "--no-service" ]; then
     echo ""
-    echo "Installing systemd service..."
+    echo "Installing systemd service (auto-start on boot)..."
     SERVICE_FILE="/etc/systemd/system/liveavatar-worker.service"
     cat > /tmp/liveavatar-worker.service << EOF
 [Unit]
@@ -119,14 +119,14 @@ EOF
     sudo cp /tmp/liveavatar-worker.service "$SERVICE_FILE"
     sudo systemctl daemon-reload
     sudo systemctl enable liveavatar-worker
-    echo "Service installed. Start with: sudo systemctl start liveavatar-worker"
+    sudo systemctl start liveavatar-worker
+    echo "Service installed and started. Auto-starts on boot."
+    echo "Logs: journalctl -u liveavatar-worker -f"
+else
+    echo ""
+    echo "Skipped service install (--no-service flag)"
+    echo "Start manually: $VENV_DIR/bin/python $REPO_ROOT/smartblog_worker.py"
 fi
 
 echo ""
 echo "=== Setup complete ==="
-echo ""
-echo "Next steps:"
-echo "  1. Edit .env and fill in HF_KEY, SUPABASE_ANON_KEY, WORKER_API_KEY"
-echo "  2. (Optional) Set LIVEAVATAR_MERGED_NOISE_MODEL_DIR for fast startup"
-echo "  3. Start worker: $VENV_DIR/bin/python $REPO_ROOT/smartblog_worker.py"
-echo "  4. Or install as service: bash setup.sh --install-service"
