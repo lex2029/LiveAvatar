@@ -1,7 +1,7 @@
 """Video enhancement module — face restoration + upscaling.
 
-Supports two modes (configurable via LIVEAVATAR_ENHANCER env):
-  - "codeformer" — CodeFormer face restoration + RealESRGAN background upscale
+Supports three modes (configurable via LIVEAVATAR_ENHANCER env):
+  - "gfpgan" / "codeformer" — GFPGAN face restoration + RealESRGAN background upscale
   - "realesrgan" — RealESRGAN only (upscale everything, no face-specific restore)
   - "" / "none" — disabled (default, use plain ffmpeg scale_cuda)
 
@@ -48,21 +48,21 @@ def _get_realesrgan(model_path: str, scale: int = 2, device: str = "cuda"):
     return _ENHANCER_CACHE[key]
 
 
-def _get_codeformer(
-    codeformer_path: str,
+def _get_gfpgan(
+    gfpgan_path: str,
     realesrgan_path: str,
     device: str = "cuda",
 ):
-    key = "codeformer"
+    key = "gfpgan"
     if key not in _ENHANCER_CACHE:
         from gfpgan import GFPGANer
 
         bg_upsampler = _get_realesrgan(realesrgan_path, scale=2, device=device)
 
         face_enhancer = GFPGANer(
-            model_path=codeformer_path,
+            model_path=gfpgan_path,
             upscale=2,
-            arch="CodeFormer",
+            arch="clean",
             channel_multiplier=2,
             bg_upsampler=bg_upsampler,
             device=device,
@@ -99,7 +99,7 @@ def enhance_video(
         str(Path(__file__).resolve().parent.parent.parent / "ckpt" / "enhancers"),
     ))
     realesrgan_path = str(ckpt_dir / "RealESRGAN_x2plus.pth")
-    codeformer_path = str(ckpt_dir / "codeformer.pth")
+    gfpgan_path = str(ckpt_dir / "GFPGANv1.4.pth")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Read input video
@@ -119,8 +119,8 @@ def enhance_video(
 
     # Init enhancer
     started_at = time.perf_counter()
-    if enhancer_type == "codeformer":
-        enhancer = _get_codeformer(codeformer_path, realesrgan_path, device)
+    if enhancer_type in ("codeformer", "gfpgan"):
+        enhancer = _get_gfpgan(gfpgan_path, realesrgan_path, device)
     elif enhancer_type == "realesrgan":
         enhancer = _get_realesrgan(realesrgan_path, scale=2, device=device)
     else:
@@ -159,14 +159,12 @@ def enhance_video(
                 break
 
             # Enhance frame
-            if enhancer_type == "codeformer":
-                fidelity = float(os.getenv("LIVEAVATAR_CODEFORMER_FIDELITY", "0.7"))
+            if enhancer_type in ("codeformer", "gfpgan"):
                 _, _, enhanced = enhancer.enhance(
                     frame,
                     has_aligned=False,
                     only_center_face=False,
                     paste_back=True,
-                    weight=fidelity,
                 )
             elif enhancer_type == "realesrgan":
                 enhanced, _ = enhancer.enhance(frame, outscale=2)
