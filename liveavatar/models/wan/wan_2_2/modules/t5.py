@@ -2,6 +2,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import logging
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -25,6 +26,8 @@ def fp16_clamp(x):
 
 
 def init_weights(m):
+    if should_skip_init():
+        return
     if isinstance(m, T5LayerNorm):
         nn.init.ones_(m.weight)
     elif isinstance(m, T5Model):
@@ -41,6 +44,18 @@ def init_weights(m):
     elif isinstance(m, T5RelativeEmbedding):
         nn.init.normal_(
             m.embedding.weight, std=(2 * m.num_buckets * m.num_heads)**-0.5)
+
+
+def should_skip_init():
+    return os.getenv("LIVEAVATAR_SKIP_T5_INIT", "true").lower() == "true"
+
+
+def should_mmap_checkpoint():
+    return os.getenv("LIVEAVATAR_T5_CHECKPOINT_MMAP", "true").lower() == "true"
+
+
+def should_meta_init_checkpoint():
+    return os.getenv("LIVEAVATAR_T5_META_INIT", "true").lower() == "true"
 
 
 class GELU(nn.Module):
@@ -298,7 +313,8 @@ class T5Encoder(nn.Module):
         self.norm = T5LayerNorm(dim)
 
         # initialize weights
-        self.apply(init_weights)
+        if not should_skip_init():
+            self.apply(init_weights)
 
     def forward(self, ids, mask=None):
         x = self.token_embedding(ids)
@@ -346,7 +362,8 @@ class T5Decoder(nn.Module):
         self.norm = T5LayerNorm(dim)
 
         # initialize weights
-        self.apply(init_weights)
+        if not should_skip_init():
+            self.apply(init_weights)
 
     def forward(self, ids, mask=None, encoder_states=None, encoder_mask=None):
         b, s = ids.size()
@@ -403,7 +420,8 @@ class T5Model(nn.Module):
         self.head = nn.Linear(dim, vocab_size, bias=False)
 
         # initialize weights
-        self.apply(init_weights)
+        if not should_skip_init():
+            self.apply(init_weights)
 
     def forward(self, encoder_ids, encoder_mask, decoder_ids, decoder_mask):
         x = self.encoder(encoder_ids, encoder_mask)
@@ -487,13 +505,21 @@ class T5EncoderModel:
         self.tokenizer_path = tokenizer_path
 
         # init model
+        init_device = 'meta' if should_meta_init_checkpoint() else device
         model = umt5_xxl(
             encoder_only=True,
             return_tokenizer=False,
             dtype=dtype,
-            device=device).eval().requires_grad_(False)
+            device=init_device).eval().requires_grad_(False)
         logging.info(f'loading {checkpoint_path}')
-        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+        load_kwargs = dict(map_location='cpu')
+        if should_mmap_checkpoint():
+            load_kwargs['mmap'] = True
+        state_dict = torch.load(checkpoint_path, **load_kwargs)
+        if should_meta_init_checkpoint():
+            model.load_state_dict(state_dict, assign=True)
+        else:
+            model.load_state_dict(state_dict)
         self.model = model
         if shard_fn is not None:
             self.model = shard_fn(self.model, sync_module_states=False)
