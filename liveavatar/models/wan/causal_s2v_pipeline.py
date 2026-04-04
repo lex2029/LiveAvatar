@@ -59,6 +59,7 @@ class WanS2V:
         self,
         config,
         checkpoint_dir,
+        noise_model_checkpoint_dir=None,
         device_id=0,
         rank=0,
         t5_fsdp=False,
@@ -109,6 +110,7 @@ class WanS2V:
         self.num_frames_per_block = config.num_frames_per_block
         self.param_dtype = config.param_dtype
         self.checkpoint_dir = checkpoint_dir
+        self.noise_model_checkpoint_dir = noise_model_checkpoint_dir or checkpoint_dir
         self.drop_part_motion_frames = drop_part_motion_frames
         self.single_gpu = single_gpu
         self.offload_kv_cache = offload_kv_cache
@@ -179,15 +181,15 @@ class WanS2V:
             else:
                 raise NotImplementedError("Unsupported solver.")
 
-        logging.info(f"Creating WanModel from {checkpoint_dir}")
+        logging.info(f"Creating WanModel from {self.noise_model_checkpoint_dir}")
         if not dit_fsdp:
             self.noise_model = CausalWanModel_S2V.from_pretrained(
-                checkpoint_dir,
+                self.noise_model_checkpoint_dir,
                 torch_dtype=self.param_dtype,
                 device_map=self.device)
         else:
             self.noise_model = CausalWanModel_S2V.from_pretrained(
-                checkpoint_dir, torch_dtype=self.param_dtype)
+                self.noise_model_checkpoint_dir, torch_dtype=self.param_dtype)
         
         self.noise_model.freqs.to(device=self.device)
 
