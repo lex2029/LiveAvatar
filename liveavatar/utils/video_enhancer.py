@@ -160,13 +160,11 @@ def enhance_video(
 
             # Enhance frame
             if enhancer_type in ("codeformer", "gfpgan"):
-                fidelity = float(os.getenv("LIVEAVATAR_CODEFORMER_FIDELITY", "0.7"))
                 _, _, enhanced = enhancer.enhance(
                     frame,
                     has_aligned=False,
                     only_center_face=False,
                     paste_back=True,
-                    weight=fidelity,
                 )
             elif enhancer_type == "realesrgan":
                 enhanced, _ = enhancer.enhance(frame, outscale=2)
