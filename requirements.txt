@@ -42,3 +42,5 @@ sam2
 insightface
 opencv-python
 gradio
+gfpgan
+realesrgan

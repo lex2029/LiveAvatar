@@ -131,6 +131,11 @@ CHECKPOINT_MANIFESTS = [
         "marker": "diffusion_pytorch_model-00001-of-00004.safetensors",
         "description": "Pre-merged LoRA+FP8 noise model (~31 GB)",
     },
+    {
+        "subfolder": "enhancers",
+        "marker": "GFPGANv1.4.pth",
+        "description": "GFPGAN + RealESRGAN + face detection enhancer weights (~755 MB)",
+    },
 ]
 
 
@@ -168,6 +173,17 @@ def ensure_checkpoints() -> None:
             token=hf_token,
         )
         log(f"Downloaded {m['description']}")
+
+    # Copy face detection weights to where facexlib expects them
+    enhancers_dir = ckpt_root / "enhancers"
+    gfpgan_weights_dir = REPO_ROOT / "gfpgan" / "weights"
+    gfpgan_weights_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("detection_Resnet50_Final.pth", "parsing_parsenet.pth"):
+        src = enhancers_dir / fname
+        dst = gfpgan_weights_dir / fname
+        if src.exists() and not dst.exists():
+            shutil.copy2(str(src), str(dst))
+            log(f"Copied {fname} -> {dst}")
 
 
 def parse_timestamp_seconds(value: Any) -> Optional[float]:
