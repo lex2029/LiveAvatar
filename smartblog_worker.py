@@ -127,11 +127,6 @@ CHECKPOINT_MANIFESTS = [
         "description": "LightTAE / LightVAE autoencoders (~74 MB)",
     },
     {
-        "subfolder": "Wan2.2-S2V-14B-merged-liveavatar-prefp8-test",
-        "marker": "diffusion_pytorch_model-00001-of-00004.safetensors",
-        "description": "Pre-merged LoRA+FP8 noise model (~31 GB)",
-    },
-    {
         "subfolder": "enhancers",
         "marker": "GFPGANv1.4.pth",
         "description": "GFPGAN + RealESRGAN + face detection enhancer weights (~755 MB)",
