@@ -639,7 +639,6 @@ class ResidentLiveAvatarRunner:
         os.environ["ENABLE_COMPILE"] = "true" if self.enable_compile else "false"
         os.environ.setdefault("PYTHONUNBUFFERED", "1")
         os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-        os.environ.setdefault("TORCHDYNAMO_CAPTURE_SCALAR_OUTPUTS", "1")
 
     def _setup_dist(self) -> None:
         import torch.distributed as dist
