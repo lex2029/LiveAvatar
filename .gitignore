@@ -237,3 +237,4 @@ VBench
 worker.pid
 ckpt/enhancers/
 gfpgan/weights/
+watchdog.log
