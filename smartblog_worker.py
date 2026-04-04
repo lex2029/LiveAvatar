@@ -1745,7 +1745,8 @@ def process_job(job_id: str) -> None:
             postprocess_started_at: Optional[float] = None
             postprocess_finished_at: Optional[float] = None
 
-            def on_render_progress(stage: str, clip_index: int, clip_total: int) -> None:
+            def on_render_progress(stage: str, clip_index: int, clip_total: int,
+                                   step_index: int = 0, step_total: int = 0) -> None:
                 nonlocal last_reported_progress, clip_generation_started_at
                 nonlocal clip_generation_finished_at, postprocess_started_at, postprocess_finished_at
                 progress = None
@@ -1757,6 +1758,12 @@ def process_job(job_id: str) -> None:
                         return
                     progress = 1 if clip_index == 1 else max(
                         1, min(40, (40 * (clip_index - 1)) // clip_total))
+                elif stage == "denoise_step":
+                    if clip_total <= 0 or step_total <= 0:
+                        return
+                    # Fraction of all clips done: (clip-1)/total + step_progress_within_clip/total
+                    frac = ((clip_index - 1) + step_index / step_total) / clip_total
+                    progress = max(1, min(40, int(frac * 40)))
                 elif stage == "clip_complete":
                     clip_generation_finished_at = time.perf_counter()
                     if clip_total <= 0:
