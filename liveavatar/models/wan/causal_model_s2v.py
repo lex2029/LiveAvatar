@@ -77,6 +77,25 @@ def _ensure_cond_cache_capacity(kv_cache, required_size):
     kv_cache["cond_v"] = cond_v
 
 
+def _write_streaming_kv_cache(cache_tensor, start_idx, values):
+    cache_size = cache_tensor.shape[1]
+    seg_len = values.shape[1]
+    if seg_len <= 0:
+        return start_idx, min(cache_size, start_idx)
+
+    start_idx = start_idx % cache_size
+    end_idx = start_idx + seg_len
+    if end_idx <= cache_size:
+        cache_tensor[:, start_idx:end_idx] = values
+        return start_idx, min(cache_size, end_idx)
+
+    first_len = cache_size - start_idx
+    second_len = end_idx - cache_size
+    cache_tensor[:, start_idx:] = values[:, :first_len]
+    cache_tensor[:, :second_len] = values[:, first_len:]
+    return start_idx, cache_size
+
+
 def sp_attn_forward_s2v(self,
                             x,
                             seq_lens, #完整的而非sp的序列长度
@@ -326,22 +345,34 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
                 roped_key = causal_rope_apply(
                     k, grid_sizes, freqs).type_as(v)
                 seg_len_block = seg_idx[1]-seg_idx[0]
+                cache_size = kv_cache["k"].shape[1]
                 active_kv_cache_start = 0
-                if current_start >= kv_cache['k'].shape[1]:# for case current_start > kv_cache size, kv_rolling
+                if current_start >= cache_size:# for case current_start > kv_cache size, kv_rolling
                     assert self.local_attn_size == -1, "local_attn_size should be -1 for streaming inference"
-                    current_start = current_start % kv_cache['k'].shape[1] 
-                    active_kv_cache_size = kv_cache['k'].shape[1]
+                    current_start = current_start % cache_size
+                    active_kv_cache_size = cache_size
                     # active_cond_cache_size = seg_len_block//3 # only ref image, hard-code for case num_frames_per_block=3
                     active_cond_cache_size = int(kv_cache["cond_end"])
                 else:
                     active_kv_cache_size = current_start+seg_len_block
-                    if self.local_attn_size != -1:
+                    if active_kv_cache_size > cache_size:
+                        assert self.local_attn_size == -1, "local_attn_size should be -1 for streaming inference"
+                        active_kv_cache_size = cache_size
+                    elif self.local_attn_size != -1:
                         # hard-code for case num_frames_per_block=3
                         active_kv_cache_start = max(0,active_kv_cache_size - self.local_attn_size * seg_len_block // 3)
                     active_cond_cache_size = int(kv_cache["cond_end"])
 
-                kv_cache["k"][:, current_start:(current_start+seg_len_block)] = roped_key[:,seg_idx[0]:seg_idx[1]]
-                kv_cache["v"][:, current_start:(current_start+seg_len_block)] = v[:,seg_idx[0]:seg_idx[1]]
+                current_start, active_kv_cache_size = _write_streaming_kv_cache(
+                    kv_cache["k"],
+                    current_start,
+                    roped_key[:, seg_idx[0]:seg_idx[1]],
+                )
+                _write_streaming_kv_cache(
+                    kv_cache["v"],
+                    current_start,
+                    v[:, seg_idx[0]:seg_idx[1]],
+                )
                 active_k = kv_cache["k"][:, active_kv_cache_start:active_kv_cache_size].to(dtype=v.dtype)
                 active_v = kv_cache["v"][:, active_kv_cache_start:active_kv_cache_size].to(dtype=v.dtype)
                 active_cond_k = kv_cache["cond_k"][:, :active_cond_cache_size].to(dtype=v.dtype)
@@ -382,7 +413,7 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
                     v=cond_v,
                     k_lens=torch.tensor(int(kv_cache["cond_end"])).repeat(b),
                     window_size=self.window_size
-                )
+                    )
             else:
                 assert False, "segment index is invalid"
 
@@ -677,8 +708,165 @@ class CausalWanModel_S2V(ModelMixin, ConfigMixin):
                 slide_motion_frames=slide_motion_frames)
 
         self.block_mask = None
-        self.num_frame_per_block = 1 #只影响训练时causal mask的行为，推理无关
+        self._simple_teacache_last_stream_key = None
+        self._simple_teacache_prev_embed = None
+        self._simple_teacache_prev_residual = None
+        self._simple_teacache_accumulated_rel_l1 = 0.0
+        self._simple_teacache_step_index = 0
+        self._simple_adacache_last_stream_key = None
+        self._simple_adacache_prev_residual = None
+        self._simple_adacache_skip_budget = 0
 
+    def _reset_simple_teacache(self):
+        self._simple_teacache_last_stream_key = None
+        self._simple_teacache_prev_embed = None
+        self._simple_teacache_prev_residual = None
+        self._simple_teacache_accumulated_rel_l1 = 0.0
+        self._simple_teacache_step_index = 0
+
+    def _reset_simple_adacache(self):
+        self._simple_adacache_last_stream_key = None
+        self._simple_adacache_prev_residual = None
+        self._simple_adacache_skip_budget = 0
+
+    def _simple_adacache_should_skip(self, stream_key):
+        if os.getenv("LIVEAVATAR_ENABLE_SIMPLE_ADACACHE", "false").lower() != "true":
+            return False
+        if self._simple_adacache_last_stream_key != stream_key:
+            self._reset_simple_adacache()
+            self._simple_adacache_last_stream_key = stream_key
+        if self._simple_adacache_prev_residual is None:
+            return False
+        if self._simple_adacache_skip_budget > 0:
+            self._simple_adacache_skip_budget -= 1
+            return True
+        return False
+
+    def _simple_adacache_update(self, stream_key, residual):
+        if os.getenv("LIVEAVATAR_ENABLE_SIMPLE_ADACACHE", "false").lower() != "true":
+            return
+        if self._simple_adacache_last_stream_key != stream_key:
+            self._reset_simple_adacache()
+            self._simple_adacache_last_stream_key = stream_key
+
+        prev = self._simple_adacache_prev_residual
+        self._simple_adacache_prev_residual = residual.detach().clone()
+        if prev is None:
+            self._simple_adacache_skip_budget = 0
+            return
+
+        diff = (
+            (prev - residual).norm().item()
+            / prev.norm().clamp_min(1e-6).item()
+        )
+        codebook_env = os.getenv(
+            "LIVEAVATAR_SIMPLE_ADACACHE_CODEBOOK",
+            "0.03:12,0.05:10,0.07:8,0.09:6,0.11:4,1.0:3",
+        )
+        pairs = []
+        for item in codebook_env.split(","):
+            item = item.strip()
+            if not item or ":" not in item:
+                continue
+            left, right = item.split(":", 1)
+            try:
+                pairs.append((float(left), int(right)))
+            except Exception:
+                continue
+        pairs.sort(key=lambda x: x[0])
+        selected = 1
+        for thresh, rate in pairs:
+            if diff < thresh:
+                selected = rate
+                break
+            selected = rate
+        self._simple_adacache_skip_budget = max(0, int(selected) - 1)
+
+    def _should_use_simple_teacache(
+        self,
+        stream_key,
+        modulated_embed,
+    ):
+        if os.getenv("LIVEAVATAR_ENABLE_SIMPLE_TEACACHE", "false").lower() != "true":
+            return False
+
+        thresh = float(os.getenv("LIVEAVATAR_SIMPLE_TEACACHE_THRESH", "0.15"))
+        force_calc_steps = max(
+            1,
+            int(os.getenv("LIVEAVATAR_SIMPLE_TEACACHE_FORCE_CALC_STEPS", "1")),
+        )
+        coeffs_env = os.getenv("LIVEAVATAR_SIMPLE_TEACACHE_POLY", "").strip()
+        coeffs = None
+        if coeffs_env:
+            try:
+                coeffs = [float(v) for v in coeffs_env.split(",") if v.strip()]
+            except Exception:
+                coeffs = None
+
+        if self._simple_teacache_last_stream_key != stream_key:
+            self._reset_simple_teacache()
+            self._simple_teacache_last_stream_key = stream_key
+
+        self._simple_teacache_step_index += 1
+        if (
+            self._simple_teacache_prev_embed is None
+            or self._simple_teacache_prev_residual is None
+            or self._simple_teacache_step_index <= force_calc_steps
+        ):
+            self._simple_teacache_prev_embed = modulated_embed.detach().clone()
+            return False
+
+        prev_embed = self._simple_teacache_prev_embed
+        rel_l1 = (
+            (modulated_embed - prev_embed).abs().mean()
+            / prev_embed.abs().mean().clamp_min(1e-6)
+        ).item()
+        if coeffs:
+            rel_l1 = float(np.poly1d(coeffs)(rel_l1))
+        self._simple_teacache_accumulated_rel_l1 += rel_l1
+        self._simple_teacache_prev_embed = modulated_embed.detach().clone()
+
+        if self._simple_teacache_accumulated_rel_l1 < thresh:
+            return True
+
+        self._simple_teacache_accumulated_rel_l1 = 0.0
+        return False
+
+    @staticmethod
+    def _serialize_rope_grid_sizes(grid_sizes):
+        serialized = []
+        for group in grid_sizes:
+            if isinstance(group, list):
+                serialized.append(
+                    tuple(
+                        tuple(tuple(int(v) for v in row) for row in tensor.detach().cpu().tolist())
+                        for tensor in group
+                    )
+                )
+            else:
+                serialized.append(
+                    tuple(tuple(int(v) for v in row) for row in group.detach().cpu().tolist())
+                )
+        return tuple(serialized)
+
+    def _get_cached_rope_freqs(self, cache_name, x_shape, grid_sizes, cache_key=None):
+        rope_freq_cache = self.rope_cache.setdefault(cache_name, {})
+        if cache_key is None:
+            cache_key = (
+                tuple(int(v) for v in x_shape),
+                self._serialize_rope_grid_sizes(grid_sizes),
+            )
+        cached = rope_freq_cache.get(cache_key)
+        if cached is None:
+            rope_input = torch.empty(
+                x_shape,
+                device=self.freqs.device,
+                dtype=self.freqs.dtype,
+            )
+            cached = rope_precompute(rope_input, grid_sizes, self.freqs, start=None).detach()
+            rope_freq_cache[cache_key] = cached
+        return cached
+        self.num_frame_per_block = 1 #只影响训练时causal mask的行为，推理无关
 
     def enable_gradient_checkpointing(self):
         self._set_gradient_checkpointing(value=True)
@@ -1201,14 +1389,13 @@ class CausalWanModel_S2V(ModelMixin, ConfigMixin):
 
         grid_sizes = torch.stack(
             [torch.tensor(u.shape[2:], dtype=torch.long) for u in x]) #tensor([[20, 24, 16]])
+        num_frames = x[0].shape[2]
+        frame_seqlen = x[0].shape[3] * x[0].shape[4]
         x = [u.flatten(2).transpose(1, 2) for u in x] # list , torch.Size([1, 7680, 5120])
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
 
         original_grid_sizes = deepcopy(grid_sizes) #只包含 noisy_latent,cond(pose)加在上面不影响 grid_size
         grid_sizes = [[torch.zeros_like(grid_sizes), grid_sizes, grid_sizes]] #[[tensor([[0, 0, 0]]), tensor([[20, 24, 16]]), tensor([[20, 24, 16]])]]
-
-        num_frames = original_grid_sizes[0][0].item()  # Get F from grid_sizes,20
-        frame_seqlen = seq_lens[0] // num_frames #注意！！！！x.shape[1]可能包含了 motion frame 和 ref frame 的部分序列！seq_len在后面会变长，要用 origin
         
         # ref and motion
         self.lat_motion_frames = motion_latents[0].shape[1] 
@@ -1220,16 +1407,30 @@ class CausalWanModel_S2V(ModelMixin, ConfigMixin):
         b, s, n, d = x.size(0), x.size(
             1), self.num_heads, self.dim // self.num_heads
 
-        self.pre_compute_freqs = rope_precompute( #可以做一点加速这里大概0.06秒，其中0.45秒是计算（cpu串行可以挪到gpu），分配内存0.15秒可以cache
-            x.detach().view(b, s, n, d), rollout_grid_sizes(grid_sizes,current_start // frame_seqlen), self.freqs, start=None )
+        rollout_offset = current_start // frame_seqlen
+        rollout_grid = rollout_grid_sizes(grid_sizes, rollout_offset)
+        self.pre_compute_freqs = self._get_cached_rope_freqs(
+            "streaming_main",
+            (b, s, n, d),
+            rollout_grid,
+            cache_key=((b, s, n, d), rollout_offset),
+        )
 
-        import random
-        relative_dist = random.randint(4, 30)
-        # relative_dist = 30
+        relative_dist_env = os.getenv("LIVEAVATAR_RELATIVE_DIST", "random").strip().lower()
+        if relative_dist_env == "random":
+            import random
+            relative_dist = random.randint(4, 30)
+        else:
+            relative_dist = max(4, min(30, int(relative_dist_env)))
         start_idx = 30-relative_dist
         num_frames_cond_rollout = max(0, current_start // frame_seqlen - start_idx)
-        cond_pre_compute_freqs = rope_precompute( 
-            torch.empty(self.rope_cache['cond_shape']).type_as(x), rollout_grid_sizes(self.rope_cache['grid_sizes'],num_frames_cond_rollout), self.freqs, start=None )
+        cond_rollout_grid = rollout_grid_sizes(self.rope_cache['grid_sizes'], num_frames_cond_rollout)
+        cond_pre_compute_freqs = self._get_cached_rope_freqs(
+            "streaming_cond",
+            tuple(int(v) for v in self.rope_cache['cond_shape']),
+            cond_rollout_grid,
+            cache_key=(tuple(int(v) for v in self.rope_cache['cond_shape']), num_frames_cond_rollout),
+        )
         # print(f"current_grid_size:{rollout_grid_sizes(grid_sizes,current_start // frame_seqlen)}")
         # print(f"cond grid_size:{rollout_grid_sizes(self.rope_cache['grid_sizes'],num_frames_cond_rollout)}")
         mask_input = torch.zeros([1,x.shape[1]], dtype=torch.long, device=x.device)
@@ -1315,28 +1516,57 @@ class CausalWanModel_S2V(ModelMixin, ConfigMixin):
                 return module(*inputs, **kwargs)
             return custom_forward
 
-        for idx, block in enumerate(self.blocks):
-            kwargs.update(
-                {
-                    "kv_cache": kv_cache[idx],
-                    "crossattn_cache": crossattn_cache[idx],
-                    "current_start": current_start,
-                    "current_end": current_end,
-                    "freqs_cond": cond_pre_compute_freqs
-                }
+        stream_key = (
+            int(current_start),
+            int(current_end),
+            int(x.shape[1]),
+            int(self.original_seq_len),
+        )
+        modulated_embed = e.detach()
+        use_simple_teacache = self._should_use_simple_teacache(
+            stream_key,
+            modulated_embed,
+        )
+        use_simple_adacache = self._simple_adacache_should_skip(stream_key)
+
+        if use_simple_teacache:
+            x = x + self._simple_teacache_prev_residual.to(
+                device=x.device,
+                dtype=x.dtype,
             )
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
-                x = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    x, **kwargs,
-                    use_reentrant=False,
+        elif use_simple_adacache:
+            x = x + self._simple_adacache_prev_residual.to(
+                device=x.device,
+                dtype=x.dtype,
+            )
+        else:
+            ori_x = x.clone()
+            for idx, block in enumerate(self.blocks):
+                kwargs.update(
+                    {
+                        "kv_cache": kv_cache[idx],
+                        "crossattn_cache": crossattn_cache[idx],
+                        "current_start": current_start,
+                        "current_end": current_end,
+                        "freqs_cond": cond_pre_compute_freqs
+                    }
                 )
-                x = self.after_transformer_block(idx, x)
-            else:
-                if torch.is_grad_enabled():
-                    print("not checkpoint!!")
-                x = block(x, **kwargs)
-                x = self.after_transformer_block(idx, x, mask)
+                if torch.is_grad_enabled() and self.gradient_checkpointing:
+                    x = torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(block),
+                        x, **kwargs,
+                        use_reentrant=False,
+                    )
+                    x = self.after_transformer_block(idx, x)
+                else:
+                    if torch.is_grad_enabled():
+                        print("not checkpoint!!")
+                    x = block(x, **kwargs)
+                    x = self.after_transformer_block(idx, x, mask)
+            residual = (x - ori_x).detach().clone()
+            if os.getenv("LIVEAVATAR_ENABLE_SIMPLE_TEACACHE", "false").lower() == "true":
+                self._simple_teacache_prev_residual = residual
+            self._simple_adacache_update(stream_key, residual)
 
         # Context Parallel
         if self.use_context_parallel:
@@ -1407,14 +1637,13 @@ class CausalWanModel_S2V(ModelMixin, ConfigMixin):
 
         grid_sizes = torch.stack(
             [torch.tensor(u.shape[2:], dtype=torch.long) for u in x]) #tensor([[20, 24, 16]])
+        num_frames = x[0].shape[2]
+        frame_seqlen = x[0].shape[3] * x[0].shape[4]
         x = [u.flatten(2).transpose(1, 2) for u in x] # list , torch.Size([1, 7680, 5120])
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
 
         original_grid_sizes = deepcopy(grid_sizes) #只包含 noisy_latent,cond(pose)加在上面不影响 grid_size
         grid_sizes = [[torch.zeros_like(grid_sizes), grid_sizes, grid_sizes]] #[[tensor([[0, 0, 0]]), tensor([[20, 24, 16]]), tensor([[20, 24, 16]])]]
-
-        num_frames = original_grid_sizes[0][0].item()  # Get F from grid_sizes,20
-        frame_seqlen = seq_lens[0] // num_frames #注意！！！！x.shape[1]可能包含了 motion frame 和 ref frame 的部分序列！seq_len在后面会变长，要用 origin
 
         # ref and motion
         self.lat_motion_frames = motion_latents[0].shape[1]
