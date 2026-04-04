@@ -1010,7 +1010,7 @@ class WanS2V:
                         generator=seed_g)
                 ]
                 clip_output = torch.zeros_like(clip_noise[0]) #[16,f,h,w]
-                kv_cache_multiplier = int(os.getenv("LIVEAVATAR_KV_CACHE_MULTIPLIER", "2"))
+                kv_cache_multiplier = int(os.getenv("LIVEAVATAR_KV_CACHE_MULTIPLIER", "1"))
                 max_seq_len = (np.prod(target_shape) // 4) * kv_cache_multiplier
                 if self.kv_cache1 is None:
                     if offload_model or self.init_on_cpu:
