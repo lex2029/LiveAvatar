@@ -2059,15 +2059,32 @@ def process_job(job_id: str) -> None:
             if postprocess_duration is not None:
                 log(f"Job {job_id} postprocess finished in {format_seconds(postprocess_duration)}")
             runner.release_gpu_for_ffmpeg()
+            enhancer_type = os.getenv("LIVEAVATAR_ENHANCER", "").strip().lower()
             upscale_started_at = time.perf_counter()
-            log(f"Job {job_id} upscale started")
-            normalize_video(
-                raw_video_path,
-                final_video_path,
-                fps=25,
-                output_size=output_size,
-                progress_callback=on_upscale_progress,
-            )
+            if enhancer_type and enhancer_type != "none":
+                log(f"Job {job_id} enhance+upscale started (enhancer={enhancer_type})")
+                from liveavatar.utils.video_enhancer import enhance_video
+                enhance_video(
+                    raw_video_path,
+                    final_video_path,
+                    output_size=output_size,
+                    fps=25,
+                    enhancer_type=enhancer_type,
+                    progress_callback=lambda pct, done, total: on_upscale_progress(
+                        max(81, min(99, 80 + int(19 * done / total))),
+                        done / 25.0,
+                        total / 25.0,
+                    ) if total > 0 else None,
+                )
+            else:
+                log(f"Job {job_id} upscale started")
+                normalize_video(
+                    raw_video_path,
+                    final_video_path,
+                    fps=25,
+                    output_size=output_size,
+                    progress_callback=on_upscale_progress,
+                )
             upscale_finished_at = time.perf_counter()
             raw_duration = probe_video_duration(raw_video_path)
             log(
