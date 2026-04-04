@@ -1099,6 +1099,7 @@ class WanS2V:
 
 
                 num_blocks = target_shape[0] // self.num_frames_per_block
+                total_steps_in_clip = num_blocks * sampling_steps
                 for block_index in range(num_blocks):
                     # 2.2.1 prepare block-level cond
                     if getattr(self, '_sampler_timesteps', None) is None:
@@ -1133,6 +1134,15 @@ class WanS2V:
                         latent_model_input = block_latents #[16,num_frames_per_block,h,w]
                         timestep = [t] * self.num_frames_per_block
                         timestep = torch.tensor(timestep).to(self.device).unsqueeze(0)
+
+                        if progress_callback is not None:
+                            completed_steps = block_index * sampling_steps + i
+                            try:
+                                progress_callback(
+                                    "denoise_step", r + 1, active_nr,
+                                    completed_steps, total_steps_in_clip)
+                            except Exception:
+                                pass
 
                         self._move_kv_cache_to_working_gpu(i+1)# i+1 gpu -> 0
                         noise_pred_cond = self.noise_model(
