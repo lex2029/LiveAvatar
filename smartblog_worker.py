@@ -1884,6 +1884,11 @@ def process_job(job_id: str) -> None:
             prompt = choose_prompt(payload)
             sample_fps = 25
             audio_duration = probe_audio_duration(audio_path)
+            min_audio = float(os.getenv("LIVEAVATAR_MIN_AUDIO_SECONDS", "5.0"))
+            if audio_duration < min_audio:
+                raise ValueError(
+                    f"Audio too short: {audio_duration:.1f}s < {min_audio:.1f}s minimum"
+                )
             runtime_profile = choose_runtime_profile(audio_duration)
             infer_frames = runtime_profile.infer_frames
             num_clip = compute_num_clip(audio_duration, infer_frames=infer_frames, fps=sample_fps)
