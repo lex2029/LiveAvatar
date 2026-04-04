@@ -1069,9 +1069,9 @@ class WanS2V:
                 if True:  # prefill every clip to avoid KV-cache overflow
                     for gpu_id in range(cache_slot_count):
                         # Zero out KV-cache before prefill to clear stale data
-                        kv = self.kv_cache1[str(gpu_id+1)]
-                        kv["k"].zero_()
-                        kv["v"].zero_()
+                        for layer_cache in self.kv_cache1[str(gpu_id+1)]:
+                            layer_cache["k"].zero_()
+                            layer_cache["v"].zero_()
                         self._move_kv_cache_to_working_gpu(gpu_id+1) # move to gpu0
 
                         block_index = 0
