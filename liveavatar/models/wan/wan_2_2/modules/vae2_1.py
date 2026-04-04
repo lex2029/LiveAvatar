@@ -1,11 +1,13 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import logging
+import os
 
 import torch
 import torch.cuda.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+from .tae2_1 import TAEHV
 
 __all__ = [
     'Wan2_1_VAE',
@@ -271,7 +273,8 @@ class Encoder3d(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_downsample=[True, True, False],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -282,6 +285,7 @@ class Encoder3d(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [1] + dim_mult]
+        dims = [int(d * (1 - pruning_rate)) for d in dims]
         scale = 1.0
 
         # init block
@@ -375,7 +379,8 @@ class Decoder3d(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_upsample=[False, True, True],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -386,6 +391,7 @@ class Decoder3d(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
+        dims = [int(d * (1 - pruning_rate)) for d in dims]
         scale = 1.0 / 2**(len(dim_mult) - 2)
 
         # init block
@@ -489,7 +495,8 @@ class WanVAE_(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_downsample=[True, True, False],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -501,11 +508,11 @@ class WanVAE_(nn.Module):
 
         # modules
         self.encoder = Encoder3d(dim, z_dim * 2, dim_mult, num_res_blocks,
-                                 attn_scales, self.temperal_downsample, dropout)
+                                 attn_scales, self.temperal_downsample, dropout, pruning_rate)
         self.conv1 = CausalConv3d(z_dim * 2, z_dim * 2, 1)
         self.conv2 = CausalConv3d(z_dim, z_dim, 1)
         self.decoder = Decoder3d(dim, z_dim, dim_mult, num_res_blocks,
-                                 attn_scales, self.temperal_upsample, dropout)
+                                 attn_scales, self.temperal_upsample, dropout, pruning_rate)
 
     def forward(self, x):
         mu, log_var = self.encode(x)
@@ -589,7 +596,7 @@ class WanVAE_(nn.Module):
         self._enc_feat_map = [None] * self._enc_conv_num
 
 
-def _video_vae(pretrained_path=None, z_dim=None, device='cpu', **kwargs):
+def _video_vae(pretrained_path=None, z_dim=None, device='cpu', pruning_rate=0.0, **kwargs):
     """
     Autoencoder3d adapted from Stable Diffusion 1.x, 2.x and XL.
     """
@@ -601,7 +608,8 @@ def _video_vae(pretrained_path=None, z_dim=None, device='cpu', **kwargs):
         num_res_blocks=2,
         attn_scales=[],
         temperal_downsample=[False, True, True],
-        dropout=0.0)
+        dropout=0.0,
+        pruning_rate=pruning_rate)
     cfg.update(**kwargs)
 
     # init model
@@ -622,7 +630,8 @@ class Wan2_1_VAE:
                  z_dim=16,
                  vae_pth='cache/vae_step_411000.pth',
                  dtype=torch.float,
-                 device="cuda"):
+                 device="cuda",
+                 use_lightvae=False):
         self.dtype = dtype
         self.device = device
 
@@ -638,10 +647,16 @@ class Wan2_1_VAE:
         self.std = torch.tensor(std, dtype=dtype, device=device)
         self.scale = [self.mean, 1.0 / self.std]
 
+        pruning_rate = 0.75 if use_lightvae else 0.0
+        pruning_rate_override = os.getenv("LIVEAVATAR_VAE_PRUNING_RATE", "").strip()
+        if pruning_rate_override:
+            pruning_rate = float(pruning_rate_override)
+
         # init model
         self.model = _video_vae(
             pretrained_path=vae_pth,
             z_dim=z_dim,
+            pruning_rate=pruning_rate,
         ).eval().requires_grad_(False).to(device,dtype)
 
     def encode(self, videos):
@@ -661,3 +676,60 @@ class Wan2_1_VAE:
                                   self.scale).float().clamp_(-1, 1).squeeze(0)
                 for u in zs
             ]
+
+
+class Wan2_1_TAE:
+    def __init__(
+        self,
+        tae_pth,
+        dtype=torch.float,
+        device="cuda",
+        parallel=True,
+        encode_parallel=None,
+        decode_parallel=None,
+        need_scaled=True,
+    ):
+        self.dtype = dtype
+        self.device = torch.device(device)
+        self.parallel = parallel
+        self.encode_parallel = parallel if encode_parallel is None else encode_parallel
+        self.decode_parallel = parallel if decode_parallel is None else decode_parallel
+        self.need_scaled = need_scaled
+        mean = [
+            -0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508,
+            0.4134, -0.0715, 0.5517, -0.3632, -0.1922, -0.9497, 0.2503, -0.2921
+        ]
+        std = [
+            2.8184, 1.4541, 2.3275, 2.6558, 1.2196, 1.7708, 2.6052, 2.0743,
+            3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.9160
+        ]
+        self.mean = torch.tensor(mean, dtype=dtype, device=device).view(1, 16, 1, 1, 1)
+        self.std_inv = (1.0 / torch.tensor(std, dtype=dtype, device=device)).view(1, 16, 1, 1, 1)
+        self.model = TAEHV(tae_pth, model_type="wan21").to(self.device, self.dtype).eval().requires_grad_(False)
+
+    def encode(self, videos):
+        outs = []
+        for u in videos:
+            vid = u.to(self.device, self.dtype).add(1.0).div_(2.0)
+            vid = vid.permute(1, 0, 2, 3).unsqueeze(0).contiguous()
+            z = self.model.encode_video(
+                vid,
+                parallel=self.encode_parallel,
+                show_progress_bar=False,
+            )
+            outs.append(z.squeeze(0).permute(1, 0, 2, 3).float())
+        return outs
+
+    def decode(self, zs):
+        outs = []
+        for u in zs:
+            z = u.to(self.device, self.dtype).unsqueeze(0)
+            if self.need_scaled:
+                z = z / self.std_inv + self.mean
+            vid = self.model.decode_video(
+                z.transpose(1, 2).contiguous(),
+                parallel=self.decode_parallel,
+                show_progress_bar=False,
+            ).transpose(1, 2)
+            outs.append(vid.float().clamp_(0, 1).mul_(2).sub_(1).squeeze(0))
+        return outs
