@@ -77,6 +77,25 @@ def _ensure_cond_cache_capacity(kv_cache, required_size):
     kv_cache["cond_v"] = cond_v
 
 
+def _write_streaming_kv_cache(cache_tensor, start_idx, values):
+    cache_size = cache_tensor.shape[1]
+    seg_len = values.shape[1]
+    if seg_len <= 0:
+        return start_idx, min(cache_size, start_idx)
+
+    start_idx = start_idx % cache_size
+    end_idx = start_idx + seg_len
+    if end_idx <= cache_size:
+        cache_tensor[:, start_idx:end_idx] = values
+        return start_idx, min(cache_size, end_idx)
+
+    first_len = cache_size - start_idx
+    second_len = end_idx - cache_size
+    cache_tensor[:, start_idx:] = values[:, :first_len]
+    cache_tensor[:, :second_len] = values[:, first_len:]
+    return start_idx, cache_size
+
+
 def sp_attn_forward_s2v(self,
                             x,
                             seq_lens, #完整的而非sp的序列长度
@@ -326,22 +345,34 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
                 roped_key = causal_rope_apply(
                     k, grid_sizes, freqs).type_as(v)
                 seg_len_block = seg_idx[1]-seg_idx[0]
+                cache_size = kv_cache["k"].shape[1]
                 active_kv_cache_start = 0
-                if current_start >= kv_cache['k'].shape[1]:# for case current_start > kv_cache size, kv_rolling
+                if current_start >= cache_size:# for case current_start > kv_cache size, kv_rolling
                     assert self.local_attn_size == -1, "local_attn_size should be -1 for streaming inference"
-                    current_start = current_start % kv_cache['k'].shape[1] 
-                    active_kv_cache_size = kv_cache['k'].shape[1]
+                    current_start = current_start % cache_size
+                    active_kv_cache_size = cache_size
                     # active_cond_cache_size = seg_len_block//3 # only ref image, hard-code for case num_frames_per_block=3
                     active_cond_cache_size = int(kv_cache["cond_end"])
                 else:
                     active_kv_cache_size = current_start+seg_len_block
-                    if self.local_attn_size != -1:
+                    if active_kv_cache_size > cache_size:
+                        assert self.local_attn_size == -1, "local_attn_size should be -1 for streaming inference"
+                        active_kv_cache_size = cache_size
+                    elif self.local_attn_size != -1:
                         # hard-code for case num_frames_per_block=3
                         active_kv_cache_start = max(0,active_kv_cache_size - self.local_attn_size * seg_len_block // 3)
                     active_cond_cache_size = int(kv_cache["cond_end"])
 
-                kv_cache["k"][:, current_start:(current_start+seg_len_block)] = roped_key[:,seg_idx[0]:seg_idx[1]]
-                kv_cache["v"][:, current_start:(current_start+seg_len_block)] = v[:,seg_idx[0]:seg_idx[1]]
+                current_start, active_kv_cache_size = _write_streaming_kv_cache(
+                    kv_cache["k"],
+                    current_start,
+                    roped_key[:, seg_idx[0]:seg_idx[1]],
+                )
+                _write_streaming_kv_cache(
+                    kv_cache["v"],
+                    current_start,
+                    v[:, seg_idx[0]:seg_idx[1]],
+                )
                 active_k = kv_cache["k"][:, active_kv_cache_start:active_kv_cache_size].to(dtype=v.dtype)
                 active_v = kv_cache["v"][:, active_kv_cache_start:active_kv_cache_size].to(dtype=v.dtype)
                 active_cond_k = kv_cache["cond_k"][:, :active_cond_cache_size].to(dtype=v.dtype)
