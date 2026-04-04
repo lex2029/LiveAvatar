@@ -78,23 +78,31 @@ def _ensure_cond_cache_capacity(kv_cache, required_size):
 
 
 def _write_streaming_kv_cache(cache_tensor, start_idx, values):
+    """Sliding-window KV-cache write.
+
+    When start_idx + seg_len would exceed cache_size, shift the existing
+    cache content left by exactly seg_len positions (dropping the oldest
+    tokens) and write the new block at the end.  This keeps a contiguous
+    window of the most recent context instead of letting absolute offsets
+    grow unbounded.
+    """
     cache_size = cache_tensor.shape[1]
     seg_len = values.shape[1]
     if seg_len <= 0:
         return start_idx, min(cache_size, start_idx)
 
-    start_idx = start_idx % cache_size
-    end_idx = start_idx + seg_len
-    if end_idx <= cache_size:
-        cache_tensor[:, start_idx:end_idx] = values
-        return start_idx, min(cache_size, end_idx)
+    # Normal case: fits in cache without overflow
+    if start_idx + seg_len <= cache_size:
+        cache_tensor[:, start_idx:start_idx + seg_len] = values
+        return start_idx, start_idx + seg_len
 
-    # Clamp write to cache bounds — don't wrap around to preserve
-    # prefill/conditioning data at the start of the cache
-    write_len = cache_size - start_idx
-    if write_len > 0:
-        cache_tensor[:, start_idx:cache_size] = values[:, :write_len]
-    return start_idx, cache_size
+    # Overflow: slide window left by seg_len, write new block at the end
+    keep = cache_size - seg_len
+    if keep > 0:
+        cache_tensor[:, :keep] = cache_tensor[:, seg_len:cache_size].clone()
+    write_start = max(0, cache_size - seg_len)
+    cache_tensor[:, write_start:cache_size] = values[:, :min(seg_len, cache_size)]
+    return write_start, cache_size
 
 
 def sp_attn_forward_s2v(self,
