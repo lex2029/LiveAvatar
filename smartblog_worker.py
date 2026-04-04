@@ -510,7 +510,8 @@ def resize_image_to_render_aspect(image_path: Path, render_size: str) -> None:
 
 
 def orientation_to_render_size(orientation: str, plan_key: str = "pro") -> str:
-    if plan_key == "free":
+    force_full = os.getenv("LIVEAVATAR_FORCE_FULL_RENDER", "true").lower() == "true"
+    if plan_key == "free" and not force_full:
         if orientation == "landscape":
             return os.getenv("LIVEAVATAR_RENDER_LANDSCAPE_SIZE_FREE", "256*448")
         return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE_FREE", "448*256")
@@ -519,10 +520,15 @@ def orientation_to_render_size(orientation: str, plan_key: str = "pro") -> str:
     return os.getenv("LIVEAVATAR_RENDER_PORTRAIT_SIZE", "832*448")
 
 
-def orientation_to_output_size(orientation: str) -> str:
+def orientation_to_output_size(orientation: str, plan_key: str = "pro") -> str:
+    force_full = os.getenv("LIVEAVATAR_FORCE_FULL_RENDER", "true").lower() == "true"
+    if plan_key == "free" and not force_full:
+        if orientation == "landscape":
+            return os.getenv("LIVEAVATAR_OUTPUT_LANDSCAPE_SIZE_FREE", "720*1280")
+        return os.getenv("LIVEAVATAR_OUTPUT_PORTRAIT_SIZE_FREE", "1280*720")
     if orientation == "landscape":
-        return os.getenv("LIVEAVATAR_OUTPUT_LANDSCAPE_SIZE", "720*1280")
-    return os.getenv("LIVEAVATAR_OUTPUT_PORTRAIT_SIZE", "1280*720")
+        return os.getenv("LIVEAVATAR_OUTPUT_LANDSCAPE_SIZE", "1080*1920")
+    return os.getenv("LIVEAVATAR_OUTPUT_PORTRAIT_SIZE", "1920*1080")
 
 
 def choose_prompt(payload: Dict[str, Any]) -> str:
@@ -1707,7 +1713,7 @@ def process_job(job_id: str) -> None:
 
             plan_key = plan_key_for_job(job, payload)
             render_size = orientation_to_render_size(orientation, plan_key)
-            output_size = orientation_to_output_size(orientation)
+            output_size = orientation_to_output_size(orientation, plan_key)
             resize_image_to_render_aspect(image_path, render_size)
             prompt = choose_prompt(payload)
             sample_fps = 25
