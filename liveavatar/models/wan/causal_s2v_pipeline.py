@@ -1066,8 +1066,12 @@ class WanS2V:
 
                 #-----------------------------------------------Temporal denoising loop in single clip---------------------------------
                 # 2.2.0 prefill cond caching
-                if r==0 or (r==1 and enable_online_decode):
+                if True:  # prefill every clip to avoid KV-cache overflow
                     for gpu_id in range(cache_slot_count):
+                        # Zero out KV-cache before prefill to clear stale data
+                        kv = self.kv_cache1[str(gpu_id+1)]
+                        kv["k"].zero_()
+                        kv["v"].zero_()
                         self._move_kv_cache_to_working_gpu(gpu_id+1) # move to gpu0
 
                         block_index = 0
@@ -1148,8 +1152,8 @@ class WanS2V:
                         noise_pred_cond = self.noise_model(
                             [latent_model_input], t=timestep, **block_arg_c, 
                             kv_cache=self.kv_cache1[str(i+1)], crossattn_cache=self.crossattn_cache,
-                            current_start=block_index * self.num_frames_per_block * frame_seq_length + r * num_blocks * self.num_frames_per_block * frame_seq_length,
-                            current_end=(block_index + 1) * self.num_frames_per_block * frame_seq_length + r * num_blocks *self.num_frames_per_block * frame_seq_length,
+                            current_start=block_index * self.num_frames_per_block * frame_seq_length,
+                            current_end=(block_index + 1) * self.num_frames_per_block * frame_seq_length,
                             mask=mask)
 
                         noise_pred = [torch.cat(noise_pred_cond, dim=0)]
