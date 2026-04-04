@@ -3,8 +3,7 @@ import numpy as np
 import torch
 from ....inference_utils import conditional_compile
 
-
-@conditional_compile
+# @conditional_compile
 def rope_precompute(x, grid_sizes, freqs, start=None):
     b, s, n, c = x.size(0), x.size(1), x.size(2), x.size(3) // 2
 
@@ -19,7 +18,6 @@ def rope_precompute(x, grid_sizes, freqs, start=None):
     seq_bucket = [0]
     if not type(grid_sizes) is list:
         grid_sizes = [grid_sizes]
-
     for g in grid_sizes:
         if not type(g) is list:
             g = [torch.zeros_like(g), g]
